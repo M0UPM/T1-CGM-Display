@@ -1,0 +1,852 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>T1 CGM Display</title>
+<style>
+  /* Deliberately no web fonts. This box must work with the internet down,
+     and a display that falls back to Times at 3am is a broken display. */
+  :root {
+    --ink:        #F2F0EB;
+    --ink-quiet:  #9AA0A6;
+    --ground:     #14171A;
+    --panel:      #1D2124;
+    --rule:       #2C3236;
+
+    --urgent-low: #A3122B;
+    --low:        #D4453A;
+    --in-range:   #16704A;
+    --high:       #C08A1E;
+    --urgent-high:#C0271D;
+    --stale:      #3A4045;
+
+    --trace:      #F2F0EB;
+    --band:       #16704A;
+    --insulin:    #6FB1E8;
+    --carbs:      #E8A33D;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body {
+    height: 100%;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: system-ui, "DejaVu Sans", "Liberation Sans", sans-serif;
+    font-variant-numeric: tabular-nums;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .screen {
+    height: 100%;
+    display: grid;
+    grid-template-rows: 1fr auto;
+  }
+
+  .top {
+    display: grid;
+    grid-template-columns: minmax(0, 66fr) minmax(0, 34fr);
+    min-height: 0;
+  }
+
+  /* ---- glucose panel ---------------------------------------------------
+     Carries the state colour. That's the across-the-room signal - you read
+     the colour before you read the digits. */
+  .bg {
+    background: var(--stale);
+    display: flex;
+    flex-direction: column;
+    text-align: center;
+    transition: background-color 900ms ease;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .bg-reading {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: grid;
+    place-content: center;
+    padding: 1.5vh 1.5vw;
+    overflow: hidden;
+  }
+
+  /* Bolus sits on the state colour, so it needs its own ground to stay
+     readable whether the panel is green, amber or red. */
+  .bolus-block {
+    flex: 0 0 auto;
+    background: rgba(0, 0, 0, 0.20);
+    border-top: 1px solid rgba(255, 255, 255, 0.22);
+    padding: 1.4vh 1.5vw 1.6vh;
+  }
+
+  .bolus-line {
+    display: flex;
+    align-items: baseline;
+    justify-content: center;
+    gap: 0.5em;
+    flex-wrap: wrap;
+  }
+
+  .suggested {
+    font-size: clamp(0.75rem, 2.2vh, 1.5rem);
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    background: rgba(0, 0, 0, 0.34);
+    padding: 0.18em 0.5em;
+    border-radius: 2px;
+    opacity: 0.95;
+  }
+
+  .label.is-suggestion { color: var(--carbs); }
+
+  .sep {
+    font-size: clamp(0.8rem, 2.4vh, 1.7rem);
+    font-weight: 700;
+    opacity: 0.45;
+  }
+
+  .with-carbs {
+    font-size: clamp(0.8rem, 2.4vh, 1.7rem);
+    font-weight: 700;
+    opacity: 0.92;
+  }
+
+  .pen-note {
+    font-size: clamp(0.7rem, 2vh, 1.35rem);
+    font-weight: 600;
+    margin-top: 0.35em;
+    opacity: 0.72;
+    line-height: 1.2;
+  }
+
+  .no-carbs {
+    font-size: clamp(0.8rem, 2.4vh, 1.7rem);
+    font-weight: 700;
+    opacity: 0.7;
+  }
+
+  .state {
+    font-size: clamp(0.75rem, 2.2vh, 1.7rem);
+    font-weight: 700;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    opacity: 0.82;
+    margin-bottom: 0.45em;
+  }
+
+  .reading {
+    display: flex;
+    align-items: baseline;
+    justify-content: center;
+    gap: 0.08em;
+    line-height: 1;
+  }
+
+  .value {
+    font-size: clamp(2.6rem, 15vh, 9rem);
+    font-weight: 800;
+    letter-spacing: -0.03em;
+  }
+
+  .arrow {
+    font-size: clamp(1.3rem, 7.5vh, 4.5rem);
+    font-weight: 400;
+    opacity: 0.9;
+  }
+
+  .units {
+    font-size: clamp(0.7rem, 1.9vh, 1.4rem);
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    opacity: 0.7;
+    margin-top: 0.8em;
+  }
+
+  /* Age is set at the same weight as the value's label, not shrunk into a
+     footnote. If the number is old, that arrives with the number. */
+  .age {
+    font-size: clamp(0.85rem, 2.7vh, 2rem);
+    font-weight: 600;
+    margin-top: 0.45em;
+    opacity: 0.95;
+  }
+
+  .bg.is-stale .value,
+  .bg.is-stale .arrow { opacity: 0.35; }
+  .bg.is-stale .age {
+    background: #000;
+    color: #FFD9D9;
+    padding: 0.16em 0.55em;
+    border-radius: 2px;
+    display: inline-block;
+  }
+
+  /* ---- graph ----------------------------------------------------------- */
+  .graph {
+    background: var(--ground);
+    position: relative;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    overflow: hidden;
+  }
+
+  .graph svg { width: 100%; height: 100%; display: block; }
+
+  .graph-empty {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-content: center;
+    color: var(--ink-quiet);
+    font-size: clamp(0.9rem, 2.4vh, 1.6rem);
+    font-weight: 600;
+  }
+
+  /* ---- treatments ------------------------------------------------------ */
+  .footer {
+    background: var(--panel);
+    border-top: 1px solid var(--rule);
+    padding: 1.2vh 2vw;
+    font-size: clamp(0.65rem, 1.7vh, 1.1rem);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: var(--ink-quiet);
+    display: flex;
+    justify-content: space-between;
+    gap: 2vw;
+  }
+
+  .label {
+    font-size: clamp(0.65rem, 1.7vh, 1.1rem);
+    font-weight: 700;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--ink-quiet);
+    margin-bottom: 0.4em;
+  }
+
+  .amount {
+    font-size: clamp(1.5rem, 5.5vh, 3.4rem);
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    line-height: 1;
+  }
+
+  .amount .u {
+    font-size: 0.42em;
+    font-weight: 600;
+    margin-left: 0.1em;
+    opacity: 0.75;
+  }
+
+  .when {
+    font-size: clamp(0.75rem, 2.1vh, 1.4rem);
+    font-weight: 600;
+    margin-top: 0.3em;
+    opacity: 0.9;
+  }
+
+  .none {
+    font-size: clamp(0.95rem, 3.2vh, 2rem);
+    font-weight: 700;
+    color: var(--ink-quiet);
+    line-height: 1.15;
+  }
+
+  /* The caveat never leaves the screen. It is the whole reason this panel
+     is safe to look at: it states what the numbers are, and are not. */
+  .clock { opacity: 0.7; }
+  .offline { color: #FFC9C9; font-weight: 700; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .bg { transition: none; }
+  }
+</style>
+</head>
+<body>
+<div class="screen">
+
+  <div class="top">
+    <div class="graph" id="graph">
+      <svg id="chart" viewBox="0 0 1000 700" preserveAspectRatio="xMidYMid meet"
+           role="img" aria-label="Glucose over the last 24 hours"></svg>
+      <div class="graph-empty" id="graphEmpty">No history yet</div>
+    </div>
+
+    <div class="bg" id="bgField">
+      <div class="bg-reading">
+        <div>
+          <div class="state" id="state">Connecting</div>
+          <div class="reading">
+            <span class="value" id="value">--</span>
+            <span class="arrow" id="arrow"></span>
+          </div>
+          <div class="units">mmol/L</div>
+          <div class="age" id="age">waiting for data</div>
+        </div>
+      </div>
+      <div class="bolus-block">
+        <div class="label" id="bolusLabel">Last bolus</div>
+        <div id="bolus"><div class="none">&mdash;</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <span id="caveatText">Logged entries only &mdash; not proof a dose was given</span>
+    <span class="clock"><span id="build">24h</span> &middot; <span id="clock"></span></span>
+  </div>
+
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  // Same-origin: nginx proxies /api to Nightscout, so no CORS to fight.
+  var API = '';
+
+  // Libre 2 Plus streams every minute, but LibreLinkUp batches. 15 minutes
+  // of nothing is well past anything explainable.
+  var STALE_MIN = 15;
+
+  // How far back to look for treatments before saying "none logged".
+  var TREATMENT_WINDOW_H = 12;
+
+  // How much history the graph shows.
+  var GRAPH_HOURS = 24;
+
+  // Above this many points the trace is thinned before drawing. A 24h
+  // window at one reading a minute is 1440 points across ~900px of plot -
+  // more points than pixels, so nothing is lost and the SVG stays light.
+  var MAX_POINTS = 720;
+
+  // LibreLinkUp returns recent data at ~1 min intervals but historical data
+  // at ~15 min intervals, so anything below ~18 here turns the older part of
+  // the trace into a field of unconnected dots. Gaps larger than this are
+  // still shown - as a faded dashed connector, not a solid line, so a real
+  // outage never masquerades as data we have.
+  var GAP_MIN = 18;
+
+  var MGDL_PER_MMOL = 18.018;
+
+  // y-axis extent, mmol/L. Y_MAX is a floor for the top of the scale, not a
+  // ceiling on the data - if readings go higher the axis grows to fit them.
+  // A clamped trace draws a flat line at the top and quietly understates how
+  // high she actually went, which is the wrong way for a scale to be wrong.
+  var Y_MIN = 2, Y_MAX = 18;
+
+  // Drawn as red dashed lines across the plot. These match the panel's colour
+  // bands: below 3.9 is low, 14.0 and above is very high.
+  var ALERT_LINES = [3.9, 14.0];
+
+  var el = {
+    field:  document.getElementById('bgField'),
+    state:  document.getElementById('state'),
+    value:  document.getElementById('value'),
+    arrow:  document.getElementById('arrow'),
+    age:    document.getElementById('age'),
+    bolus:  document.getElementById('bolus'),
+    bolusLabel: document.getElementById('bolusLabel'),
+    bolusLabel: document.getElementById('bolusLabel'),
+    clock:  document.getElementById('clock'),
+    caveat: document.getElementById('caveatText'),
+    chart:  document.getElementById('chart'),
+    empty:  document.getElementById('graphEmpty')
+  };
+
+  var ARROWS = {
+    DoubleUp: '\u21C8', SingleUp: '\u2191', FortyFiveUp: '\u2197',
+    Flat: '\u2192',
+    FortyFiveDown: '\u2198', SingleDown: '\u2193', DoubleDown: '\u21CA',
+    'NOT COMPUTABLE': '', 'RATE OUT OF RANGE': ''
+  };
+
+  var last = { entries: null, treatments: null };
+
+  function mmol(mgdl) { return mgdl / MGDL_PER_MMOL; }
+
+  function ago(ms) {
+    var m = Math.floor(ms / 60000);
+    if (m < 1)  return 'just now';
+    if (m === 1) return '1 min ago';
+    if (m < 60) return m + ' min ago';
+    var h = Math.floor(m / 60), r = m % 60;
+    if (h < 24) return r ? h + 'h ' + r + 'm ago' : h + 'h ago';
+    var d = Math.floor(h / 24);
+    return d === 1 ? 'yesterday' : d + ' days ago';
+  }
+
+  function hhmm(d) {
+    return String(d.getHours()).padStart(2, '0') + ':' +
+           String(d.getMinutes()).padStart(2, '0');
+  }
+
+  function bandFor(v) {
+    if (v < 3.0)  return { css: 'var(--urgent-low)',  label: 'Urgent low' };
+    if (v < 3.9)  return { css: 'var(--low)',         label: 'Low' };
+    if (v < 10.0) return { css: 'var(--in-range)',    label: 'In range' };
+    if (v < 14.0) return { css: 'var(--high)',        label: 'High' };
+    return { css: 'var(--urgent-high)', label: 'Very high' };
+  }
+
+  // ---- glucose panel ------------------------------------------------------
+
+  function renderGlucose() {
+    var e = last.entries && last.entries.length ? last.entries[0] : null;
+
+    if (!e) {
+      el.field.style.backgroundColor = 'var(--stale)';
+      el.field.classList.add('is-stale');
+      el.state.textContent = 'No data';
+      el.value.textContent = '--';
+      el.arrow.textContent = '';
+      el.age.textContent = 'nothing received yet';
+      return;
+    }
+
+    var age = Date.now() - e.date;
+    var stale = age > STALE_MIN * 60000;
+    var v = mmol(e.sgv);
+
+    el.value.textContent = v.toFixed(1);
+    el.arrow.textContent = ARROWS[e.direction] || '';
+
+    if (stale) {
+      // Colour is a claim about right now. If the reading is old we have no
+      // claim to make, so the colour goes rather than lying in green.
+      el.field.style.backgroundColor = 'var(--stale)';
+      el.field.classList.add('is-stale');
+      el.state.textContent = 'Out of date';
+      el.age.textContent = 'last reading ' + ago(age);
+    } else {
+      var band = bandFor(v);
+      el.field.style.backgroundColor = band.css;
+      el.field.classList.remove('is-stale');
+      el.state.textContent = band.label;
+      el.age.textContent = ago(age);
+    }
+  }
+
+  // ---- graph --------------------------------------------------------------
+
+  var W = 1000, H = 700;
+  var M = { top: 26, right: 46, bottom: 54, left: 96 };
+  var PW = W - M.left - M.right;
+  var PH = H - M.top - M.bottom;
+
+  function svgEl(name, attrs) {
+    var n = document.createElementNS('http://www.w3.org/2000/svg', name);
+    for (var k in attrs) n.setAttribute(k, attrs[k]);
+    return n;
+  }
+
+  // Rebuilding the whole SVG is ~750 DOM nodes. The data only changes once a
+  // minute at best, so redrawing on every 10s tick burns CPU to produce an
+  // identical picture. Skip when nothing relevant has moved.
+  var lastGraphSig = null;
+
+  function graphSignature() {
+    var e = last.entries || [];
+    var t = last.treatments || [];
+    var newest = e.length ? e[0].date : 0;
+    // Hour bucket so the axis still re-labels as time passes.
+    return [newest, e.length, t.length,
+            Math.floor(Date.now() / 3600000)].join(':');
+  }
+
+  function renderGraph(force) {
+    var sig = graphSignature();
+    if (!force && sig === lastGraphSig) return;
+    lastGraphSig = sig;
+
+    var chart = el.chart;
+    while (chart.firstChild) chart.removeChild(chart.firstChild);
+
+    var now = Date.now();
+    var t0 = now - GRAPH_HOURS * 3600000;
+
+    var pts = (last.entries || [])
+      .filter(function (e) { return e.date >= t0 && e.sgv; })
+      .map(function (e) { return { t: e.date, v: mmol(e.sgv) }; })
+      .sort(function (a, b) { return a.t - b.t; });
+
+    if (pts.length > MAX_POINTS) {
+      var stride = Math.ceil(pts.length / MAX_POINTS);
+      var thinned = [];
+      for (var q = 0; q < pts.length; q += stride) thinned.push(pts[q]);
+      // Always keep the newest reading - it's the one the eye goes to.
+      if (thinned[thinned.length - 1] !== pts[pts.length - 1]) {
+        thinned.push(pts[pts.length - 1]);
+      }
+      pts = thinned;
+    }
+
+    el.empty.style.display = pts.length < 2 ? 'grid' : 'none';
+
+    // Grow the axis to fit the data rather than clipping it.
+    var yTop = Y_MAX, yBot = Y_MIN;
+    for (var q = 0; q < pts.length; q++) {
+      if (pts[q].v > yTop) yTop = Math.ceil(pts[q].v) + 1;
+      if (pts[q].v < yBot) yBot = Math.floor(pts[q].v);
+    }
+
+    var x = function (t) { return M.left + ((t - t0) / (now - t0)) * PW; };
+    var y = function (v) {
+      var c = Math.max(yBot, Math.min(yTop, v));
+      return M.top + PH - ((c - yBot) / (yTop - yBot)) * PH;
+    };
+
+    // Target band 3.9-10.0. Shaded rather than lined, so the eye reads
+    // "inside/outside" without counting gridlines.
+    chart.appendChild(svgEl('rect', {
+      x: M.left, y: y(10.0), width: PW, height: y(3.9) - y(10.0),
+      fill: 'var(--band)', opacity: '0.16'
+    }));
+
+    // Plain gridlines: top of the target band, plus an upper line that
+    // reflects however far the scale had to stretch.
+    var upper = yTop >= 20 ? Math.floor(yTop) - 1 : 15;
+    var plain = [10.0];
+    if (ALERT_LINES.indexOf(upper) === -1) plain.push(upper);
+
+    plain.forEach(function (v) {
+      chart.appendChild(svgEl('line', {
+        x1: M.left, x2: M.left + PW, y1: y(v), y2: y(v),
+        stroke: 'var(--rule)', 'stroke-width': 1
+      }));
+      var lab = svgEl('text', {
+        x: M.left - 10, y: y(v) + 6, 'text-anchor': 'end',
+        fill: 'var(--ink-quiet)', 'font-size': 28, 'font-weight': 600
+      });
+      lab.textContent = v < 10 ? v.toFixed(1) : v.toFixed(0);
+      chart.appendChild(lab);
+    });
+
+    // Alert thresholds. Red and dashed so they read as limits rather than as
+    // scale furniture - the eye should catch the trace crossing one.
+    ALERT_LINES.forEach(function (v) {
+      if (v > yTop || v < yBot) return;
+      chart.appendChild(svgEl('line', {
+        x1: M.left, x2: M.left + PW, y1: y(v), y2: y(v),
+        stroke: 'var(--low)', 'stroke-width': 3,
+        'stroke-dasharray': '14 10', opacity: 0.85
+      }));
+      var lab = svgEl('text', {
+        x: M.left - 10, y: y(v) + 6, 'text-anchor': 'end',
+        fill: 'var(--low)', 'font-size': 28, 'font-weight': 700
+      });
+      lab.textContent = v < 10 ? v.toFixed(1) : v.toFixed(0);
+      chart.appendChild(lab);
+    });
+
+    // hour ticks - spacing scales with the window so labels never collide
+    var step = GRAPH_HOURS <= 6 ? 1
+             : GRAPH_HOURS <= 12 ? 2
+             : GRAPH_HOURS <= 24 ? 3
+             : 6;
+    var d = new Date(now);
+    d.setMinutes(0, 0, 0);
+    // Anchor ticks to sensible clock hours (00:00, 03:00...) rather than to
+    // whatever hour it happens to be now.
+    d.setHours(d.getHours() - (d.getHours() % step));
+    for (var k = 0; k <= Math.ceil(GRAPH_HOURS / step) + 1; k++) {
+      var tick = d.getTime() - k * step * 3600000;
+      if (tick < t0) continue;
+      var isMidnight = new Date(tick).getHours() === 0;
+      chart.appendChild(svgEl('line', {
+        x1: x(tick), x2: x(tick), y1: M.top, y2: M.top + PH,
+        stroke: 'var(--rule)',
+        'stroke-width': isMidnight ? 2 : 1,
+        opacity: isMidnight ? 1 : 0.5
+      }));
+      var tl = svgEl('text', {
+        x: x(tick), y: H - 16, 'text-anchor': 'middle',
+        fill: 'var(--ink-quiet)', 'font-size': 28, 'font-weight': 600
+      });
+      tl.textContent = hhmm(new Date(tick));
+      chart.appendChild(tl);
+    }
+
+    // trace, broken across gaps
+    if (pts.length > 1) {
+      var seg = [], segs = [];
+      for (var i = 0; i < pts.length; i++) {
+        if (i > 0 && pts[i].t - pts[i - 1].t > GAP_MIN * 60000) {
+          if (seg.length) segs.push(seg);
+          seg = [];
+        }
+        seg.push(pts[i]);
+      }
+      if (seg.length) segs.push(seg);
+
+      // Bridge the gaps first so the connectors sit behind the real trace.
+      for (var g = 1; g < segs.length; g++) {
+        var a = segs[g - 1][segs[g - 1].length - 1];
+        var b = segs[g][0];
+        chart.appendChild(svgEl('path', {
+          d: 'M' + x(a.t).toFixed(1) + ' ' + y(a.v).toFixed(1) +
+             'L' + x(b.t).toFixed(1) + ' ' + y(b.v).toFixed(1),
+          fill: 'none', stroke: 'var(--trace)', 'stroke-width': 2.5,
+          'stroke-dasharray': '6 9', 'stroke-linecap': 'round',
+          opacity: 0.38
+        }));
+      }
+
+      segs.forEach(function (s) {
+        if (s.length === 1) {
+          chart.appendChild(svgEl('circle', {
+            cx: x(s[0].t), cy: y(s[0].v), r: 4.5, fill: 'var(--trace)'
+          }));
+          return;
+        }
+        var dstr = s.map(function (p, i) {
+          return (i ? 'L' : 'M') + x(p.t).toFixed(1) + ' ' + y(p.v).toFixed(1);
+        }).join(' ');
+        chart.appendChild(svgEl('path', {
+          d: dstr, fill: 'none', stroke: 'var(--trace)',
+          'stroke-width': 5, 'stroke-linejoin': 'round',
+          'stroke-linecap': 'round'
+        }));
+      });
+
+      // Mark the newest point so the eye lands on "now"
+      var lastPt = pts[pts.length - 1];
+      chart.appendChild(svgEl('circle', {
+        cx: x(lastPt.t), cy: y(lastPt.v), r: 11,
+        fill: 'var(--trace)', stroke: 'var(--ground)', 'stroke-width': 3
+      }));
+    }
+
+    // treatment markers along the foot of the plot
+    var baseY = M.top + PH;
+    (last.treatments || []).forEach(function (t) {
+      var when = Date.parse(t.created_at || t.timestamp);
+      if (!when || when < t0 || when > now) return;
+
+      if (t.insulin > 0) {
+        chart.appendChild(svgEl('path', {
+          d: 'M' + x(when) + ' ' + (baseY - 30) + ' l12 26 l-24 0 Z',
+          fill: 'var(--insulin)'
+        }));
+      }
+      if (t.carbs > 0) {
+        chart.appendChild(svgEl('rect', {
+          x: x(when) - 10, y: baseY - 14, width: 20, height: 14,
+          fill: 'var(--carbs)', rx: 2.5
+        }));
+      }
+    });
+
+    // Window caption. The leftmost hour tick lands wherever it lands, which
+    // makes the span easy to misread - state it outright.
+    var cap = svgEl('text', {
+      x: M.left, y: M.top - 4, 'text-anchor': 'start',
+      fill: 'var(--ink-quiet)', 'font-size': 24, 'font-weight': 700,
+      'letter-spacing': 3
+    });
+    var oldest = pts.length ? pts[0].t : null;
+    var coverH = oldest ? (now - oldest) / 3600000 : 0;
+
+    // Spell out the actual span. Hour ticks anchor to clock hours, so the
+    // first label can sit hours after the plot begins - which makes the
+    // window impossible to work out by counting labels. Don't make anyone
+    // do that arithmetic.
+    var dayName = function (t) {
+      return ['SUN','MON','TUE','WED','THU','FRI','SAT'][new Date(t).getDay()];
+    };
+    var range = oldest
+      ? hhmm(new Date(oldest)) + ' ' + dayName(oldest) +
+        ' \u2192 ' + hhmm(new Date(now)) + ' ' + dayName(now)
+      : '';
+
+    if (!oldest) {
+      cap.textContent = 'LAST ' + GRAPH_HOURS + ' HOURS';
+    } else if (coverH >= GRAPH_HOURS - 0.5) {
+      cap.textContent = 'LAST ' + GRAPH_HOURS + ' HOURS  \u00B7  ' + range;
+    } else {
+      cap.textContent = 'LAST ' + GRAPH_HOURS + ' HOURS  \u00B7  ' +
+        (coverH < 1 ? Math.round(coverH * 60) + ' MIN' : coverH.toFixed(1) + 'H') +
+        ' OF DATA  \u00B7  ' + range;
+    }
+    chart.appendChild(cap);
+
+
+    // axis floor
+    chart.appendChild(svgEl('line', {
+      x1: M.left, x2: M.left + PW, y1: baseY, y2: baseY,
+      stroke: 'var(--rule)', 'stroke-width': 2
+    }));
+  }
+
+  // ---- treatments ---------------------------------------------------------
+
+  // Carbs logged within this window of a bolus count as the same event.
+  var CARB_PAIR_MIN = 20;
+
+  function renderTreatments() {
+    var list = last.treatments;
+    if (!list) return;
+
+    var cutoff = Date.now() - TREATMENT_WINDOW_H * 3600000;
+    var newest = null;
+
+    // Take the most recent entry that has either insulin or carbs on it.
+    for (var i = 0; i < list.length; i++) {
+      var t = list[i];
+      var ins = t.insulin > 0 ? t.insulin : 0;
+      var carb = t.carbs > 0 ? t.carbs : 0;
+      if (!ins && !carb) continue;
+      var when = Date.parse(t.created_at || t.timestamp);
+      if (!when || when < cutoff) continue;
+      if (!newest || when > newest.when) {
+        newest = { when: when, insulin: ins, carbs: carb };
+      }
+    }
+
+    if (!newest) {
+      // "None logged" not "0" - a zero would read as a fact about her,
+      // rather than a fact about the logbook.
+      el.bolus.innerHTML = '<div class="none">Nothing logged in ' +
+                           TREATMENT_WINDOW_H + ' hours</div>';
+      el.bolusLabel.textContent = 'Last entry';
+      return;
+    }
+
+    // Pull in anything logged around the same moment.
+    for (var j = 0; j < list.length; j++) {
+      var c = list[j];
+      var cw = Date.parse(c.created_at || c.timestamp);
+      if (!cw || Math.abs(cw - newest.when) > CARB_PAIR_MIN * 60000) continue;
+      if (c.carbs > 0 && !newest.carbs) newest.carbs = c.carbs;
+      if (c.insulin > 0 && !newest.insulin) newest.insulin = c.insulin;
+      // Glooko stashes the mylife bolus-calculator output in notes as JSON.
+      // This is what the app RECOMMENDED, not what was delivered - on pens
+      // nothing records the actual injection, so it is the closest figure
+      // available. Displayed, but never as a dose.
+      if (!newest.suggested && c.notes) {
+        try {
+          var meta = JSON.parse(c.notes);
+          var rec = meta.totalInsulinRecommendation;
+          if (typeof rec === 'number' && rec > 0) newest.suggested = rec;
+        } catch (e) { /* notes is free text, not ours to worry about */ }
+      }
+    }
+
+    var d = new Date(newest.when);
+    var stamp = '<div class="when">' + hhmm(d) + ' &middot; ' +
+                ago(Date.now() - newest.when) + '</div>';
+
+    if (newest.insulin > 0) {
+      // A delivered dose was actually recorded - pump, or logged by hand.
+      el.bolusLabel.textContent = 'Last bolus';
+      var units = Math.round(newest.insulin * 100) / 100;
+      var carbBit = newest.carbs > 0
+        ? '<span class="sep">&middot;</span><span class="with-carbs">with ' +
+          Math.round(newest.carbs) + 'g</span>'
+        : '';
+      el.bolus.innerHTML =
+        '<div class="bolus-line">' +
+          '<span class="amount">' + units + '<span class="u">u</span></span>' +
+          carbBit +
+        '</div>' + stamp;
+      return;
+    }
+
+    // Carbs only. On pens, mylife records the carb entry and its own dose
+    // suggestion, but never what was actually injected - so Glooko always
+    // reports insulin 0. Say that plainly rather than showing a bolus panel
+    // that reads as "no insulin given".
+    el.bolusLabel.textContent = 'Last carbs';
+    var note = newest.suggested
+      ? 'app suggested ' + (Math.round(newest.suggested * 100) / 100) +
+        'u &mdash; not confirmed given'
+      : 'insulin given by pen &mdash; not recorded';
+    el.bolus.innerHTML =
+      '<div class="bolus-line">' +
+        '<span class="amount">' + Math.round(newest.carbs) +
+        '<span class="u">g</span></span>' +
+      '</div>' + stamp +
+      '<div class="pen-note">' + note + '</div>';
+  }
+
+  function tick() {
+    el.clock.textContent = hhmm(new Date());
+    renderGlucose();
+    renderGraph();
+    renderTreatments();
+  }
+
+  function get(path) {
+    return fetch(API + path, { cache: 'no-store' }).then(function (r) {
+      if (!r.ok) throw new Error(r.status);
+      return r.json();
+    });
+  }
+
+  function online() {
+    el.caveat.classList.remove('offline');
+    el.caveat.textContent =
+      'Logged entries only \u2014 not proof a dose was given';
+  }
+
+  function offline() {
+    // Can't reach Nightscout. Say so plainly rather than leaving the last
+    // good numbers sitting there looking current.
+    el.caveat.classList.add('offline');
+    el.caveat.textContent =
+      'Cannot reach Nightscout \u2014 values shown may be out of date';
+  }
+
+  // Two cadences. The current reading is cheap and wanted promptly; a full
+  // 24h of history is ~1400 records and doesn't need re-fetching every 30
+  // seconds just to redraw a line that barely moved.
+  function pollCurrent() {
+    get('/api/v1/entries.json?count=1').then(function (res) {
+      if (res && res[0]) {
+        if (!last.entries || !last.entries.length ||
+            res[0].date > last.entries[0].date) {
+          last.entries = (last.entries || []).slice();
+          last.entries.unshift(res[0]);
+        }
+      }
+      online();
+      tick();
+    }).catch(function () { offline(); tick(); });
+  }
+
+  function pollHistory() {
+    // Filter by date as well as count. Relying on count alone means a
+    // deployment that caps it silently gives you a short graph, which is
+    // exactly the sort of quiet wrongness this display shouldn't have.
+    var since = Date.now() - GRAPH_HOURS * 3600000;
+    var sinceIso = new Date(since).toISOString();
+    Promise.all([
+      get('/api/v1/entries.json?count=' + (GRAPH_HOURS * 60 + 120) +
+          '&find[date][$gte]=' + since),
+      get('/api/v1/treatments.json?count=400' +
+          '&find[created_at][$gte]=' + encodeURIComponent(sinceIso))
+    ]).then(function (res) {
+      last.entries = res[0] || [];
+      last.treatments = res[1] || [];
+      online();
+      tick();
+    }).catch(function () { offline(); tick(); });
+  }
+
+  window.addEventListener('resize', function () { renderGraph(true); });
+
+  pollHistory();
+  setInterval(pollCurrent, 30000);    // latest reading
+  setInterval(pollHistory, 180000);   // full window, every 3 min
+  setInterval(tick, 10000);           // re-age what we already have
+})();
+</script>
+</body>
+</html>

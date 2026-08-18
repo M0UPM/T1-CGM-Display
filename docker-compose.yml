@@ -1,0 +1,141 @@
+# T1 CGM Display stack - LAN only, nothing exposed to the internet.
+#
+# The only outbound traffic is the LibreLinkUp poll to Abbott's API.
+# Nothing needs to reach in. No reverse proxy, no certs, no port forward.
+#
+# Bring up with:  docker compose up -d
+# Logs:           docker compose logs -f
+
+services:
+
+  mongo:
+    # Tag is configurable because MongoDB 5.0+ needs AVX on x86_64 and
+    # ARMv8.2-A on arm64. Run ./preflight.sh - it tells you which to use.
+    # No AVX (Celeron, Atom, Pentium Silver, N-series, anything pre-2011)
+    # means mongod dies at startup with "Illegal instruction (core dumped)".
+    image: mongo:${MONGO_TAG:-7}
+    container_name: ns-mongo
+    restart: unless-stopped
+    volumes:
+      - ./data/mongo:/data/db
+    # NOTE: deliberately no `ports:` block. Mongo is reachable only from
+    # the other containers on this compose network. Never expose 27017.
+    command: ["--quiet", "--wiredTigerCacheSizeGB", "0.5"]
+    healthcheck:
+      # mongosh doesn't exist in 4.4 (it ships the legacy `mongo` shell), so
+      # try both - keeps this working whichever tag preflight told you to use.
+      test: ["CMD-SHELL", "mongosh --quiet --eval \"db.adminCommand('ping')\" || mongo --quiet --eval \"db.adminCommand('ping')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  nightscout:
+    image: nightscout/cgm-remote-monitor:latest
+    container_name: ns-web
+    restart: unless-stopped
+    # The connect plugin dumps its whole state every minute. Cap the log or
+    # it will quietly eat the disk over a few months.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    depends_on:
+      mongo:
+        condition: service_healthy
+    ports:
+      # Bound to the Pi's LAN address only (set NS_BIND in .env).
+      # Use 127.0.0.1 if you only ever want it on the display screen itself.
+      - "${NS_BIND:-0.0.0.0}:1337:1337"
+    environment:
+      MONGO_CONNECTION: mongodb://mongo:27017/nightscout
+      API_SECRET: ${API_SECRET}
+      DISPLAY_UNITS: mmol
+      TIME_FORMAT: "24"
+      LANGUAGE: en
+
+      # LAN-only install: leave this readable so the kiosk browser loads
+      # straight to the clock view with no token in the URL and nothing to
+      # re-enter after a reboot. If this box ever becomes reachable from
+      # outside the house, change to `denied` FIRST.
+      AUTH_DEFAULT_ROLES: readable
+
+      BASE_URL: ${BASE_URL}
+      INSECURE_USE_HTTP: "true"
+
+      ENABLE: careportal basal iob cob bwp cage sage bage rawbg dbsize delta direction upbat ${NS_EXTRA_ENABLE:-}
+
+      # ---- Glooko treatments (optional) --------------------------------
+      # Runs as a Nightscout PLUGIN, not a sidecar. nightscout-connect reads
+      # CONNECT_* variables through cgm-remote-monitor's extended-settings
+      # parser - that parser doesn't exist in the standalone repo, so running
+      # it as a bare container leaves every option undefined.
+      #
+      # Turn on by setting NS_EXTRA_ENABLE=connect in .env plus the
+      # credentials below, then: docker compose up -d nightscout
+      CONNECT_SOURCE: glooko
+      CONNECT_GLOOKO_EMAIL: ${CONNECT_GLOOKO_EMAIL:-}
+      CONNECT_GLOOKO_PASSWORD: ${CONNECT_GLOOKO_PASSWORD:-}
+      # 'eu' maps to eu.api.glooko.com and eu.my.glooko.com.
+      CONNECT_GLOOKO_ENV: ${CONNECT_GLOOKO_ENV:-eu}
+      # Hours from UTC. 1 during BST, 0 in winter. Does NOT auto-adjust.
+      CONNECT_GLOOKO_TIMEZONE_OFFSET: ${CONNECT_GLOOKO_TIMEZONE_OFFSET:-0}
+      SHOW_PLUGINS: careportal delta direction upbat
+
+      # Thresholds in mg/dL regardless of DISPLAY_UNITS - Nightscout stores
+      # and configures in mg/dL internally. These are the standard consensus
+      # bands: 3.9-10.0 mmol/L target.
+      BG_HIGH: "234"      # 13.0 mmol/L - urgent high
+      BG_TARGET_TOP: "180"  # 10.0 mmol/L
+      BG_TARGET_BOTTOM: "70" # 3.9 mmol/L
+      BG_LOW: "54"        # 3.0 mmol/L - urgent low
+
+      # Nightscout's own alarms are OFF. The Libre app is the safety layer.
+      # This box is for graphs and history, not for waking anyone up.
+      ALARM_HIGH: "off"
+      ALARM_LOW: "off"
+      ALARM_URGENT_HIGH: "off"
+      ALARM_URGENT_LOW: "off"
+      ALARM_TIMEAGO_WARN: "off"
+      ALARM_TIMEAGO_URGENT: "off"
+
+  librelink:
+    image: timoschlueter/nightscout-librelink-up:latest
+    container_name: ns-bridge
+    restart: unless-stopped
+    depends_on:
+      - nightscout
+    environment:
+      LINK_UP_USERNAME: ${LINK_UP_USERNAME}
+      LINK_UP_PASSWORD: ${LINK_UP_PASSWORD}
+      LINK_UP_REGION: ${LINK_UP_REGION:-EU}
+      LINK_UP_TIME_INTERVAL: "1"
+      # Pin of the LibreLinkUp app version the bridge pretends to be.
+      # Abbott rejects stale values - this is the field you'll need to bump
+      # when the bridge suddenly stops. See README.
+      LINK_UP_VERSION: ${LINK_UP_VERSION:-4.16.0}
+      LINK_UP_CONNECTION: ${LINK_UP_CONNECTION:-}
+      NIGHTSCOUT_URL: nightscout:1337
+      NIGHTSCOUT_API_TOKEN: ${NS_API_TOKEN}
+      NIGHTSCOUT_DISABLE_HTTPS: "true"
+      NIGHTSCOUT_DEVICE_NAME: librelink-bridge
+      LOG_LEVEL: info
+      RETRY_MAX: "3"
+      RETRY_DELAY: "30"
+
+  # ---- Display -----------------------------------------------------
+  # Serves the wall page and proxies /api to Nightscout on the same origin.
+  # Point the kiosk at http://localhost:8080/ rather than at Nightscout.
+
+  display:
+    image: nginx:alpine
+    container_name: t1-display
+    restart: unless-stopped
+    depends_on:
+      - nightscout
+    ports:
+      - "${NS_BIND:-0.0.0.0}:8080:80"
+    volumes:
+      - ./display/index.html:/usr/share/nginx/html/index.html:ro
+      - ./display/nginx.conf:/etc/nginx/conf.d/default.conf:ro

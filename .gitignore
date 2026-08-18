@@ -1,0 +1,28 @@
+# CREDENTIALS - never commit these.
+# .env holds LibreView, Glooko, Nightscout and Telegram credentials in
+# plaintext. If you ever commit it, treat every credential in it as burned:
+# change them, don't just delete the file. Git history keeps everything.
+.env
+.env.*
+!env.example
+
+# Encryption keys
+*.key
+!*.pub
+
+# Backups - these contain personal health data
+backups/
+*.age
+*.archive
+
+# Runtime state
+.glooko-seen.json
+.staleness-state
+data/
+
+# Editors and OS
+*.swp
+*~
+.DS_Store
+__pycache__/
+*.pyc

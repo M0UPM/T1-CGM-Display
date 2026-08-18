@@ -1,0 +1,112 @@
+# Systemd units. Adjust User= and the paths, then:
+#
+#   sudo cp *.service *.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now ns-backup.timer ns-staleness.timer ns-kiosk-restart.timer ns-glooko.timer
+#
+# Check them with:  systemctl list-timers 'ns-*'
+
+
+# ===== /etc/systemd/system/ns-backup.service =====
+[Unit]
+Description=Nightscout encrypted backup
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=YOURUSER
+WorkingDirectory=/home/YOURUSER/t1-display
+ExecStart=/home/YOURUSER/t1-display/ns-backup.sh
+
+
+# ===== /etc/systemd/system/ns-backup.timer =====
+[Unit]
+Description=Nightly Nightscout backup
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target
+
+
+# ===== /etc/systemd/system/ns-staleness.service =====
+[Unit]
+Description=Nightscout bridge staleness check
+
+[Service]
+Type=oneshot
+User=YOURUSER
+WorkingDirectory=/home/YOURUSER/t1-display
+ExecStart=/home/YOURUSER/t1-display/ns-staleness.sh
+
+
+# ===== /etc/systemd/system/ns-staleness.timer =====
+[Unit]
+Description=Check the LibreLinkUp bridge is still fetching
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=10min
+
+[Install]
+WantedBy=timers.target
+
+
+# ===== /etc/systemd/system/ns-kiosk-restart.service =====
+# If you switch the TV off overnight by hand, the display connector goes away
+# and comes back in the morning. Usually fine - but occasionally Chromium
+# comes up on a zero-size output, or just doesn't repaint. Restarting the
+# kiosk once in the morning costs nothing and removes the whole class of
+# problem. Nightscout and the bridge are untouched, so no data is affected.
+[Unit]
+Description=Restart the kiosk after the TV has been off
+
+[Service]
+Type=oneshot
+ExecStart=/bin/systemctl restart ns-kiosk.service
+
+
+# ===== /etc/systemd/system/ns-kiosk-restart.timer =====
+[Unit]
+Description=Morning kiosk refresh
+
+[Timer]
+OnCalendar=*-*-* 06:00:00
+Persistent=false
+
+[Install]
+WantedBy=timers.target
+
+
+# ===== /etc/systemd/system/ns-glooko.service =====
+# Pulls carb entries from Glooko. Replaces the built-in connect plugin, which
+# queries an endpoint shape Glooko no longer accepts and silently returns
+# nothing. Set NS_EXTRA_ENABLE= (empty) in .env so the two don't both try.
+[Unit]
+Description=Glooko carb sync
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+User=YOURUSER
+WorkingDirectory=/home/YOURUSER/t1-display
+ExecStart=/home/YOURUSER/t1-display/glooko-carbs.py
+
+
+# ===== /etc/systemd/system/ns-glooko.timer =====
+[Unit]
+Description=Pull carbs from Glooko
+
+[Timer]
+# Glooko lags well behind real time - yesterday's entry took 83 minutes from
+# logging to appearing. Polling faster than this gains nothing.
+OnBootSec=3min
+OnUnitActiveSec=10min
+
+[Install]
+WantedBy=timers.target
