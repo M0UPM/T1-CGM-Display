@@ -1,10 +1,10 @@
 # T1 CGM Display
 
-A wall display for a child's continuous glucose monitor. Runs on a spare PC or
+A wall display for a continuous glucose monitor. Runs on a spare PC or
 a Raspberry Pi, shows the last 24 hours on a TV wherever you need it, and stays
 entirely on your own network.
 
-Built for a three-year-old on FreeStyle Libre 2 Plus with insulin pens, using
+Built originally for a three-year-old on FreeStyle Libre 2 Plus with insulin pens, using
 Nightscout as the datastore. Most of it applies to any Libre or Dexcom setup.
 
 ![the display](docs/display.png)
