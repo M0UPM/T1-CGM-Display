@@ -123,16 +123,22 @@ see it. To put the same display on a TV in another room, a Raspberry Pi is
 enough — it only needs a browser, not the whole stack:
 
 ```bash
-# on the Pi
+# on the Pi - Pi OS Lite is fine and preferable
+sudo apt update && sudo apt install -y chromium-browser git
 git clone https://github.com/M0UPM/T1-CGM-Display.git
 cd T1-CGM-Display
-sudo apt install -y chromium-browser
-KIOSK_URL=http://displayhost:8080/ ./install-kiosk.sh
+KIOSK_URL=http://<display-machine>:8080/ ./install-kiosk.sh
 sudo reboot
 ```
 
 Nothing changes on the server. The second screen is read-only and shows
-exactly the same thing, including the greyed-out state if the feed stops.
+exactly the same thing, including the greyed-out state if the feed stops — so
+both rooms tell the same truth.
+
+Tested on a Pi 3 Model B with Pi OS Lite. The installer works out that there's
+no desktop, installs `cage` and `seatd`, takes tty1 off getty and boots
+straight to the display. It also skips the Docker dependency, since a viewer
+doesn't run the stack.
 
 ## Requirements
 

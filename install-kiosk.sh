@@ -67,15 +67,22 @@ echo "Using: $CHROMIUM"
 
 if [[ -n "${KIOSK_BACKEND:-}" ]]; then
     MODE="$KIOSK_BACKEND"
-elif [[ -f "$HOME/.config/wayfire.ini" ]] || pgrep -x wayfire >/dev/null 2>&1; then
+
+# Only choose a desktop compositor if it is actually INSTALLED. Testing for
+# Raspbian isn't enough - Pi OS Lite reports the same and has no compositor
+# at all, so the autostart file gets written, nothing ever reads it, and
+# Chromium exits with "Failed to connect to Wayland display".
+elif command -v wayfire >/dev/null 2>&1 \
+     && { [[ -f "$HOME/.config/wayfire.ini" ]] || pgrep -x wayfire >/dev/null 2>&1; }; then
     MODE=wayfire
-elif [[ -d "$HOME/.config/labwc" ]] || pgrep -x labwc >/dev/null 2>&1 \
-     || grep -qi raspbian /etc/os-release 2>/dev/null; then
+elif command -v labwc >/dev/null 2>&1 \
+     && { [[ -d "$HOME/.config/labwc" ]] || pgrep -x labwc >/dev/null 2>&1; }; then
     MODE=labwc
 elif [[ ! -e /dev/dri/card0 ]]; then
     echo "No /dev/dri - no KMS. Falling back to X11."
     MODE=x11
 else
+    # No desktop: cage is the right answer, including on Pi OS Lite.
     MODE=cage
 fi
 
@@ -181,42 +188,69 @@ cage)
         sudo apt-get update -qq
         sudo apt-get install -y cage
     fi
+
+    # seatd manages access to the DRM device. Without it cage reports
+    # "Could not open VT for client" and never draws anything.
+    if ! command -v seatd >/dev/null 2>&1; then
+        echo "Installing seatd..."
+        sudo apt-get install -y seatd
+    fi
+    sudo systemctl enable --now seatd >/dev/null 2>&1 || true
+
+    # seatd runs as 'seatd -g video' on Debian, so video is the group that
+    # matters. There is no 'seat' group despite what most guides say.
+    echo "Adding ${USER_NAME} to video and render groups..."
+    sudo usermod -aG video,render "${USER_NAME}" 2>/dev/null || true
+
+    # This machine boots to the display, so nothing should hold tty1.
+    sudo systemctl disable --now getty@tty1.service >/dev/null 2>&1 || true
+
+    # Only depend on docker if this machine actually runs the stack. A
+    # second screen in another room does not.
+    if [[ "$KIOSK_URL" == *localhost* || "$KIOSK_URL" == *127.0.0.1* ]]; then
+        STACK_DEP="After=docker.service
+Wants=docker.service"
+    else
+        STACK_DEP=""
+    fi
     # No unclutter here - see the note in the launcher. It's an X11 tool and
     # costs a core under Wayland.
-
-    # cage talks to the GPU directly via DRM/KMS - without these groups it
-    # fails to open /dev/dri/card0 and never draws anything.
-    echo "Adding ${USER_NAME} to video and render groups..."
-    sudo usermod -aG video,render "${USER_NAME}"
 
     echo "Writing systemd service..."
     sudo tee /etc/systemd/system/ns-kiosk.service >/dev/null <<EOF
 [Unit]
 Description=T1 CGM display kiosk
-After=docker.service systemd-user-sessions.service
-Wants=docker.service
+After=systemd-user-sessions.service
+# getty owns tty1 by default. Without Conflicts the two fight over it and
+# cage is killed with SIGHUP on every start, restarting forever.
+Conflicts=getty@tty1.service
+After=getty@tty1.service
+${STACK_DEP}
 
 [Service]
 Type=simple
 User=${USER_NAME}
+WorkingDirectory=${HOME}
+# PAMName gives logind a real seat session, which libseat needs to open the
+# DRM device. Note there is deliberately no TTYReset or TTYVHangup here -
+# those are what send the SIGHUP.
 PAMName=login
 TTYPath=/dev/tty1
-TTYReset=yes
-TTYVHangup=yes
-StandardInput=tty-fail
+StandardInput=tty
 StandardOutput=journal
 StandardError=journal
-Environment=XDG_RUNTIME_DIR=/run/user/${USER_UID}
+UtmpIdentifier=tty1
+UtmpMode=user
 Environment=XDG_SESSION_TYPE=wayland
+# Lets wlroots start with no keyboard or mouse attached, which is the normal
+# state of a screen on a wall.
+Environment=WLR_LIBINPUT_NO_DEVICES=1
 Environment=KIOSK_URL=${KIOSK_URL}
 ExecStart=/usr/bin/cage -d -- ${HOME}/.local/bin/ns-kiosk.sh
 Restart=always
 RestartSec=5
 
 [Install]
-# multi-user.target, NOT graphical.target - this script sets the box to boot
-# to console, so a graphical.target unit is enabled but never started and
-# leaves you with a blank TV and an empty journal.
 WantedBy=multi-user.target
 EOF
 
