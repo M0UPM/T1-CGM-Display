@@ -14,6 +14,13 @@
 # Run as the user who'll own the display, NOT with sudo:
 #   ./install-kiosk.sh
 #
+# SECOND SCREEN in another room - a Pi showing the same display. Point it at
+# the machine running the stack instead of at itself:
+#
+#   KIOSK_URL=http://kitchen:8080/ ./install-kiosk.sh
+#
+# Nothing extra is needed on the server; it already serves on 0.0.0.0:8080.
+#
 # Most kiosk guides tell you to use xset/X11 to stop screen blanking. That
 # does nothing on any of the above - they're all Wayland.
 
@@ -92,8 +99,12 @@ cat > "$HOME/.local/bin/ns-kiosk.sh" <<EOF
 #!/usr/bin/env bash
 URL="\${KIOSK_URL:-$KIOSK_URL}"
 
+# Derived from URL so this also works for a second screen in another room
+# pointed at the machine running the stack, rather than at itself.
+HEALTH="\$(printf '%s' "\$URL" | sed 's#\\(https\\?://[^/]*\\).*#\\1#')/api/v1/status.json"
+
 for i in \$(seq 1 60); do
-    curl -sf -o /dev/null "http://localhost:8080/api/v1/status.json" && break
+    curl -sf -m 5 -o /dev/null "\$HEALTH" && break
     sleep 5
 done
 

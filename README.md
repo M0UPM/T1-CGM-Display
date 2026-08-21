@@ -1,10 +1,10 @@
 # T1 CGM Display
 
-A wall display for a continuous glucose monitor. Runs on a spare PC or
+A wall display for a child's continuous glucose monitor. Runs on a spare PC or
 a Raspberry Pi, shows the last 24 hours on a TV wherever you need it, and stays
 entirely on your own network.
 
-Built originally for a three-year-old on FreeStyle Libre 2 Plus with insulin pens, using
+Built for a three-year-old on FreeStyle Libre 2 Plus with insulin pens, using
 Nightscout as the datastore. Most of it applies to any Libre or Dexcom setup.
 
 ![the display](docs/display.png)
@@ -93,7 +93,7 @@ reports what each endpoint actually holds.
 ## Setup
 
 ```bash
-git clone https://github.com/M0UPM/t1-cgm-display.git
+git clone https://github.com/YOURNAME/t1-cgm-display.git
 cd t1-cgm-display
 ./setup.sh
 ```
@@ -115,6 +115,24 @@ Two things that will cost you an hour if you skip them, both covered in
 SETUP.md: the Nightscout access token needs a custom role for
 `api:entries:create`, and the LibreLinkUp bridge wants the **SHA1 hash** of
 that token rather than the token itself.
+
+## More than one screen
+
+The display machine serves on `0.0.0.0:8080`, so any browser on the LAN can
+see it. To put the same display on a TV in another room, a Raspberry Pi is
+enough — it only needs a browser, not the whole stack:
+
+```bash
+# on the Pi
+git clone https://github.com/M0UPM/T1-CGM-Display.git
+cd T1-CGM-Display
+sudo apt install -y chromium-browser
+KIOSK_URL=http://displayhost:8080/ ./install-kiosk.sh
+sudo reboot
+```
+
+Nothing changes on the server. The second screen is read-only and shows
+exactly the same thing, including the greyed-out state if the feed stops.
 
 ## Requirements
 
