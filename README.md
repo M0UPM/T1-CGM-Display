@@ -116,6 +116,43 @@ SETUP.md: the Nightscout access token needs a custom role for
 `api:entries:create`, and the LibreLinkUp bridge wants the **SHA1 hash** of
 that token rather than the token itself.
 
+## Reducing the lag
+
+The display will run a minute or two behind the phone. Most of that is
+upstream and not tunable:
+
+| Hop | Typical delay | Tunable |
+|---|---|---|
+| Sensor to phone | 0-60s | no |
+| Phone to vendor cloud | 30-90s, variable | no |
+| Cloud to bridge | up to 60s | already at the minimum |
+| Bridge to display | up to `POLL_CURRENT_SEC` | **yes** |
+
+Two things you can change:
+
+**`POLL_CURRENT_SEC`** at the top of `display/index.html` - how often the page
+asks Nightscout for the newest value.
+It defaults to 15 seconds. Lowering it further has rapidly diminishing returns
+— the vendor cloud hop dominates — but it costs almost nothing, since it's one
+small request to a machine on your own LAN.
+
+**`libre-poll.py`**, an optional replacement for the bridge container. The
+bridge polls once a minute, which is its floor - it schedules on cron, and
+`*/1` is as fine as cron gets. `libre-poll.py` uses a plain interval instead:
+
+```bash
+./libre-poll.py --dry-run        # see what it would post
+./libre-poll.py --loop 30        # every 30 seconds
+```
+
+Readings are deduplicated by timestamp, so polling faster than they arrive is
+harmless. Unit file in `systemd-units.txt`. Stop the bridge container if you
+switch: `docker compose stop librelink`.
+
+Be realistic about the gain. Halving the poll interval halves *that hop* only,
+and the phone-to-cloud hop is usually larger and entirely outside your
+control. Going from 60s to 30s is worth having; going to 10s is not.
+
 ## More than one screen
 
 The display machine serves on `0.0.0.0:8080`, so any browser on the LAN can

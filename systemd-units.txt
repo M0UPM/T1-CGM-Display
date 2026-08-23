@@ -110,3 +110,33 @@ OnUnitActiveSec=10min
 
 [Install]
 WantedBy=timers.target
+
+
+# ===== /etc/systemd/system/libre-poll.service =====
+# Faster alternative to the ns-bridge container. The bridge schedules on cron,
+# whose floor is one minute; this polls on a plain interval so it can run every
+# 30 seconds. Readings are deduplicated by timestamp, so nothing is posted
+# twice however often it runs.
+#
+# Run EITHER this OR the ns-bridge container, not both - they'd both work, but
+# you'd be logging in to Abbott twice as often for no benefit.
+#   docker compose stop librelink
+[Unit]
+Description=LibreLinkUp glucose poller
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=YOURUSER
+WorkingDirectory=/home/YOURUSER/ns-kitchen
+ExecStart=/home/YOURUSER/ns-kitchen/libre-poll.py --loop 30
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
+
+# Note this is a service, not a timer - it holds its own loop so it can go
+# below systemd's one-second timer granularity comfortably, and it keeps the
+# session open between polls rather than logging in every time.
