@@ -66,9 +66,73 @@ age -r "$AGE_RECIPIENT" -o "${OUT}/nightscout-${STAMP}.archive.age" "$WORK/ns.ar
 
 if [[ -n "${BACKUP_TARGET:-}" ]]; then
     log "shipping to ${BACKUP_TARGET}"
-    rsync -a --timeout=120 "${OUT}/nightscout-${STAMP}.archive.age" "$BACKUP_TARGET" \
-        && log "shipped" \
-        || log "ERROR: rsync to VPS failed - local copy retained"
+    if rsync -a --timeout=120 "${OUT}/nightscout-${STAMP}.archive.age" "$BACKUP_TARGET"; then
+        log "shipped"
+        SHIPPED=1
+    else
+        log "ERROR: rsync to backup host failed - local copy retained"
+        SHIPPED=0
+    fi
+fi
+
+# ---- prune the remote --------------------------------------------------
+# rsync only ever adds, so without this the backup host grows forever. Each
+# dump is a full snapshot, so they get bigger as the database does.
+#
+# Only prunes if tonight's upload actually succeeded. Deleting old backups
+# because a new one failed to arrive is exactly the wrong move.
+if [[ -n "${BACKUP_TARGET:-}" && "${SHIPPED:-0}" == "1" ]]; then
+    REMOTE_HOST="${BACKUP_TARGET%%:*}"
+    REMOTE_PATH="${BACKUP_TARGET#*:}"
+    KEEP_DAILY="${REMOTE_KEEP_DAILY:-7}"
+    KEEP_WEEKLY="${REMOTE_KEEP_WEEKLY:-0}"
+
+    log "pruning ${REMOTE_HOST}, keeping ${KEEP_DAILY} daily${KEEP_WEEKLY:+ + $KEEP_WEEKLY weekly}"
+
+    # Runs on the backup host. Keeps the newest N, and optionally one per
+    # ISO week beyond that as protection against corruption you don't spot
+    # for a while - seven dailies are no help if all seven are bad.
+    ssh -o BatchMode=yes -o ConnectTimeout=20 "$REMOTE_HOST" \
+        "KEEP_DAILY='$KEEP_DAILY' KEEP_WEEKLY='$KEEP_WEEKLY' bash -s" <<REMOTE || \
+            log "WARNING: remote prune failed - old backups left in place"
+set -euo pipefail
+KEEP_DAILY="\${KEEP_DAILY:-7}"
+KEEP_WEEKLY="\${KEEP_WEEKLY:-0}"
+cd "$REMOTE_PATH" 2>/dev/null || exit 0
+shopt -s nullglob
+ALL=(\$(ls -1 nightscout-*.archive.age 2>/dev/null | sort -r))
+[[ \${#ALL[@]} -eq 0 ]] && exit 0
+
+declare -A KEEP
+# newest N unconditionally
+for ((i=0; i<KEEP_DAILY && i<\${#ALL[@]}; i++)); do KEEP["\${ALL[i]}"]=1; done
+
+# one per ISO week for the older ones
+if (( KEEP_WEEKLY > 0 )); then
+    declare -A WEEK_SEEN
+    kept_weeks=0
+    for f in "\${ALL[@]}"; do
+        [[ -n "\${KEEP[\$f]:-}" ]] && continue
+        stamp="\${f#nightscout-}"; stamp="\${stamp%%.*}"
+        d="\${stamp:0:4}-\${stamp:4:2}-\${stamp:6:2}"
+        wk=\$(date -d "\$d" +%G-W%V 2>/dev/null) || continue
+        if [[ -z "\${WEEK_SEEN[\$wk]:-}" ]]; then
+            WEEK_SEEN[\$wk]=1
+            KEEP["\$f"]=1
+            kept_weeks=\$((kept_weeks+1))
+            (( kept_weeks >= KEEP_WEEKLY )) && break
+        fi
+    done
+fi
+
+removed=0
+for f in "\${ALL[@]}"; do
+    if [[ -z "\${KEEP[\$f]:-}" ]]; then
+        rm -f -- "\$f" && removed=\$((removed+1))
+    fi
+done
+echo "remote: \${#ALL[@]} present, \$removed removed, \$(( \${#ALL[@]} - removed )) kept"
+REMOTE
 fi
 
 log "pruning local copies, keeping ${BACKUP_KEEP:-7}"

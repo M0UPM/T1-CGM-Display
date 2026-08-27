@@ -196,7 +196,10 @@ This handles a child's health data. The defaults assume LAN-only:
 - `AUTH_DEFAULT_ROLES` is `readable` because nothing is reachable from
   outside. **If you ever expose this, change it to `denied` first** or the URL
   alone gives anyone the full history.
-- Backups are age-encrypted before they leave the machine.
+- Backups are age-encrypted before they leave the machine, and pruned at both
+  ends. `REMOTE_KEEP_DAILY` and `REMOTE_KEEP_WEEKLY` in `.env` control how much
+  the backup host holds; the remote is only pruned when that night's upload
+  actually succeeded, so a failed transfer never deletes good copies.
 - `.env` holds plaintext credentials. It is gitignored — keep it that way. If
   you ever commit it, change every credential rather than just deleting the
   file.
