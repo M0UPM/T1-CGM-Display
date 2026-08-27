@@ -93,7 +93,7 @@ reports what each endpoint actually holds.
 ## Setup
 
 ```bash
-git clone https://github.com/YOURNAME/t1-cgm-display.git
+git clone https://github.com/M0UPM/t1-cgm-display.git
 cd t1-cgm-display
 ./setup.sh
 ```
