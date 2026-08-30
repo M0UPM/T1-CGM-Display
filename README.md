@@ -4,9 +4,10 @@ A wall display for a continuous glucose monitor. Runs on a spare PC or
 a Raspberry Pi, shows the last 24 hours on a TV wherever you need it, and stays
 entirely on your own network.
 
-Built for a three-year-old on FreeStyle Libre 2 Plus with insulin pens, using
-Nightscout as the datastore. Most of it applies to any Libre or Dexcom setup.
-We're moving to an omnipod 5 soon so keep an eye out for more updates!
+Built for a three-year-old on FreeStyle Libre 2 Plus with insulin pens, but it
+suits anyone with Type 1 — adult or child, pens or pump. Uses Nightscout as the
+datastore; most of it applies to any Libre or Dexcom setup. We're moving to an
+Omnipod 5 soon, so keep an eye out for more updates!
 
 ![the display](docs/display.png)
 
@@ -58,7 +59,7 @@ sounds when the data source is unreliable:
 - **Every value carries its age**, at the same weight as the value itself.
 - **Gaps are bridged visibly.** A dashed connector, not a solid line — a real
   sensor outage never passes as data you have.
-- **"None logged" is never "0".** A zero is a claim about the child; "none
+- **"None logged" is never "0".** A zero is a claim about the person; "none
   logged in 12 hours" is a claim about the logbook, which is all the display
   can honestly make.
 - **The axis grows, it never clips.** A fixed ceiling draws a flat line across
