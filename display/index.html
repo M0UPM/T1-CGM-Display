@@ -312,6 +312,21 @@
   // Same-origin: nginx proxies /api to Nightscout, so no CORS to fight.
   var API = '';
 
+  // ---- polling ------------------------------------------------------------
+  // How often to ask for the newest reading. This is the only part of the
+  // end-to-end delay you control from here; the rest is sensor -> phone ->
+  // vendor cloud -> bridge, and none of that is tunable. Dropping this to 15
+  // shaves up to 15s off what you see, and costs nothing - it's one tiny
+  // request to a machine on your own LAN.
+  var POLL_CURRENT_SEC = 15;
+
+  // The full 24h window is ~1400 records. It barely changes minute to minute,
+  // so there is no point refetching it as often as the current value.
+  var POLL_HISTORY_SEC = 180;
+
+  // Re-ages the "x min ago" text between fetches. Cheap - no network.
+  var TICK_SEC = 10;
+
   // Libre 2 Plus streams every minute, but LibreLinkUp batches. 15 minutes
   // of nothing is well past anything explainable.
   var STALE_MIN = 15;
@@ -383,6 +398,10 @@
     return d === 1 ? 'yesterday' : d + ' days ago';
   }
 
+  // Capitalise the first letter, for the reading-panel age line only. The
+  // treatment timestamp ("16:29 · just now") stays lower-case after the dot.
+  function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+
   function hhmm(d) {
     return String(d.getHours()).padStart(2, '0') + ':' +
            String(d.getMinutes()).padStart(2, '0');
@@ -407,7 +426,7 @@
       el.state.textContent = 'No data';
       el.value.textContent = '--';
       el.arrow.textContent = '';
-      el.age.textContent = 'nothing received yet';
+      el.age.textContent = 'Nothing received yet';
       return;
     }
 
@@ -424,13 +443,13 @@
       el.field.style.backgroundColor = 'var(--stale)';
       el.field.classList.add('is-stale');
       el.state.textContent = 'Out of date';
-      el.age.textContent = 'last reading ' + ago(age);
+      el.age.textContent = cap('last reading ' + ago(age));
     } else {
       var band = bandFor(v);
       el.field.style.backgroundColor = band.css;
       el.field.classList.remove('is-stale');
       el.state.textContent = band.label;
-      el.age.textContent = ago(age);
+      el.age.textContent = cap(ago(age));
     }
   }
 
@@ -765,9 +784,9 @@
     // that reads as "no insulin given".
     el.bolusLabel.textContent = 'Last carbs';
     var note = newest.suggested
-      ? 'app suggested ' + (Math.round(newest.suggested * 100) / 100) +
+      ? 'App suggested ' + (Math.round(newest.suggested * 100) / 100) +
         'u &mdash; not confirmed given'
-      : 'insulin given by pen &mdash; not recorded';
+      : 'Insulin given by pen &mdash; not recorded';
     el.bolus.innerHTML =
       '<div class="bolus-line">' +
         '<span class="amount">' + Math.round(newest.carbs) +
@@ -843,9 +862,9 @@
   window.addEventListener('resize', function () { renderGraph(true); });
 
   pollHistory();
-  setInterval(pollCurrent, 30000);    // latest reading
-  setInterval(pollHistory, 180000);   // full window, every 3 min
-  setInterval(tick, 10000);           // re-age what we already have
+  setInterval(pollCurrent, POLL_CURRENT_SEC * 1000);
+  setInterval(pollHistory, POLL_HISTORY_SEC * 1000);
+  setInterval(tick,        TICK_SEC * 1000);
 })();
 </script>
 </body>
