@@ -187,6 +187,13 @@
   }
 
   /* ---- graph ----------------------------------------------------------- */
+  .graph-col {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+  }
+
   .graph {
     background: var(--ground);
     position: relative;
@@ -259,6 +266,93 @@
     line-height: 1.15;
   }
 
+  /* ---- time in range ---------------------------------------------------
+     The stacked bar that clinic reports use, so it reads the same way to
+     the diabetes team. Two rows: last 24h, and the 14-day clinical window. */
+  .tir {
+    flex: 0 0 auto;
+    background: var(--panel);
+    border-top: 1px solid var(--rule);
+    padding: 1vh 1.5vw 0.6vh;
+    display: flex;
+    flex-direction: column;
+    gap: 0.7vh;
+  }
+
+  .tir-title {
+    font-size: clamp(0.6rem, 1.5vh, 1rem);
+    font-weight: 700;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--ink-quiet);
+    margin-bottom: 0.2vh;
+  }
+
+  .tir-row {
+    display: grid;
+    grid-template-columns: clamp(3.5rem, 7vw, 6rem) 1fr;
+    align-items: center;
+    gap: 1.4vw;
+  }
+
+  .tir-label {
+    font-size: clamp(0.6rem, 1.5vh, 1rem);
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-quiet);
+    text-align: right;
+  }
+
+  .tir-bar {
+    display: flex;
+    height: clamp(1.1rem, 3vh, 2rem);
+    border-radius: 3px;
+    overflow: hidden;
+    background: var(--stale);
+  }
+
+  .tir-seg {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: clamp(0.55rem, 1.5vh, 1rem);
+    font-weight: 800;
+    color: #fff;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    transition: flex-basis 600ms ease;
+  }
+  /* a segment too thin for its own number just shows colour */
+  .tir-seg.narrow { font-size: 0; }
+
+  .tir-legend {
+    display: flex;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 0.4em 1.4vw;
+    padding-top: 0.2vh;
+    font-size: clamp(0.55rem, 1.4vh, 0.95rem);
+    font-weight: 600;
+    color: var(--ink-quiet);
+    letter-spacing: 0.03em;
+  }
+  .tir-legend span { display: flex; align-items: center; gap: 0.4em; }
+  .tir-legend i {
+    width: 0.85em; height: 0.85em; border-radius: 2px; display: inline-block;
+  }
+
+  .tir-empty {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--ink-quiet);
+    font-size: clamp(0.6rem, 1.6vh, 1.05rem);
+    font-weight: 600;
+  }
+
   /* The caveat never leaves the screen. It is the whole reason this panel
      is safe to look at: it states what the numbers are, and are not. */
   .clock { opacity: 0.7; }
@@ -273,10 +367,31 @@
 <div class="screen">
 
   <div class="top">
-    <div class="graph" id="graph">
-      <svg id="chart" viewBox="0 0 1000 700" preserveAspectRatio="xMidYMid meet"
-           role="img" aria-label="Glucose over the last 24 hours"></svg>
-      <div class="graph-empty" id="graphEmpty">No history yet</div>
+    <div class="graph-col">
+      <div class="graph" id="graph">
+        <svg id="chart" viewBox="0 0 1000 700" preserveAspectRatio="xMidYMid meet"
+             role="img" aria-label="Glucose over the last 24 hours"></svg>
+        <div class="graph-empty" id="graphEmpty">No history yet</div>
+      </div>
+
+      <div class="tir" id="tir">
+        <div class="tir-title">Time in range</div>
+        <div class="tir-row">
+          <div class="tir-label">24 hours</div>
+          <div class="tir-bar" id="tir24"><div class="tir-empty">building&hellip;</div></div>
+        </div>
+        <div class="tir-row">
+          <div class="tir-label">14 days</div>
+          <div class="tir-bar" id="tir14"><div class="tir-empty">building&hellip;</div></div>
+        </div>
+        <div class="tir-legend">
+          <span><i style="background:var(--urgent-low)"></i>Very low</span>
+          <span><i style="background:var(--low)"></i>Low</span>
+          <span><i style="background:var(--in-range)"></i>In range 3.9&ndash;10</span>
+          <span><i style="background:var(--high)"></i>High</span>
+          <span><i style="background:var(--urgent-high)"></i>Very high</span>
+        </div>
+      </div>
     </div>
 
     <div class="bg" id="bgField">
@@ -337,6 +452,11 @@
   // How much history the graph shows.
   var GRAPH_HOURS = 24;
 
+  // Time-in-range: the clinical standard window is 14 days. It barely moves
+  // minute to minute, so it's fetched infrequently and cached.
+  var TIR_DAYS = 14;
+  var TIR_POLL_SEC = 600;
+
   // Above this many points the trace is thinned before drawing. A 24h
   // window at one reading a minute is 1440 points across ~900px of plot -
   // more points than pixels, so nothing is lost and the SVG stays light.
@@ -369,7 +489,8 @@
     age:    document.getElementById('age'),
     bolus:  document.getElementById('bolus'),
     bolusLabel: document.getElementById('bolusLabel'),
-    bolusLabel: document.getElementById('bolusLabel'),
+    tir24:  document.getElementById('tir24'),
+    tir14:  document.getElementById('tir14'),
     clock:  document.getElementById('clock'),
     caveat: document.getElementById('caveatText'),
     chart:  document.getElementById('chart'),
@@ -398,13 +519,60 @@
     return d === 1 ? 'yesterday' : d + ' days ago';
   }
 
-  // Capitalise the first letter, for the reading-panel age line only. The
-  // treatment timestamp ("16:29 · just now") stays lower-case after the dot.
-  function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
-
   function hhmm(d) {
     return String(d.getHours()).padStart(2, '0') + ':' +
            String(d.getMinutes()).padStart(2, '0');
+  }
+
+  // Consensus TIR bands, bottom to top, with the same colours as the panel.
+  var TIR_BANDS = [
+    { key: 'vlow', max: 3.0,  css: 'var(--urgent-low)',  label: 'Very low'  },
+    { key: 'low',  max: 3.9,  css: 'var(--low)',         label: 'Low'       },
+    { key: 'in',   max: 10.0, css: 'var(--in-range)',    label: 'In range'  },
+    { key: 'high', max: 14.0, css: 'var(--high)',        label: 'High'      },
+    { key: 'vhigh',max: 1e9,  css: 'var(--urgent-high)', label: 'Very high' }
+  ];
+
+  function computeTIR(entries, sinceMs) {
+    // Count readings per band over the window. Equal weighting per reading is
+    // the standard method and is accurate when readings are evenly spaced,
+    // which CGM data is.
+    var counts = [0,0,0,0,0], total = 0;
+    for (var i = 0; i < entries.length; i++) {
+      var e = entries[i];
+      if (!e.sgv || e.date < sinceMs) continue;
+      var v = e.sgv / MGDL_PER_MMOL;
+      for (var b = 0; b < TIR_BANDS.length; b++) {
+        if (v < TIR_BANDS[b].max) { counts[b]++; break; }
+      }
+      total++;
+    }
+    return { counts: counts, total: total };
+  }
+
+  function renderTIR(node, data) {
+    while (node.firstChild) node.removeChild(node.firstChild);
+    if (!data || data.total < 10) {
+      // Not enough data to mean anything yet - say so rather than draw a bar
+      // that implies precision it doesn't have.
+      var em = document.createElement('div');
+      em.className = 'tir-empty';
+      em.textContent = data && data.total ? 'not enough data yet'
+                                          : 'no data yet';
+      node.appendChild(em);
+      return;
+    }
+    for (var b = 0; b < TIR_BANDS.length; b++) {
+      var pct = data.counts[b] / data.total * 100;
+      if (pct <= 0) continue;
+      var seg = document.createElement('div');
+      seg.className = 'tir-seg' + (pct < 7 ? ' narrow' : '');
+      seg.style.flex = '0 0 ' + pct.toFixed(2) + '%';
+      seg.style.background = TIR_BANDS[b].css;
+      seg.title = TIR_BANDS[b].label + ' ' + Math.round(pct) + '%';
+      seg.textContent = Math.round(pct) + '%';
+      node.appendChild(seg);
+    }
   }
 
   function bandFor(v) {
@@ -426,7 +594,7 @@
       el.state.textContent = 'No data';
       el.value.textContent = '--';
       el.arrow.textContent = '';
-      el.age.textContent = 'Nothing received yet';
+      el.age.textContent = 'nothing received yet';
       return;
     }
 
@@ -443,13 +611,13 @@
       el.field.style.backgroundColor = 'var(--stale)';
       el.field.classList.add('is-stale');
       el.state.textContent = 'Out of date';
-      el.age.textContent = cap('last reading ' + ago(age));
+      el.age.textContent = 'last reading ' + ago(age);
     } else {
       var band = bandFor(v);
       el.field.style.backgroundColor = band.css;
       el.field.classList.remove('is-stale');
       el.state.textContent = band.label;
-      el.age.textContent = cap(ago(age));
+      el.age.textContent = ago(age);
     }
   }
 
@@ -784,9 +952,9 @@
     // that reads as "no insulin given".
     el.bolusLabel.textContent = 'Last carbs';
     var note = newest.suggested
-      ? 'App suggested ' + (Math.round(newest.suggested * 100) / 100) +
+      ? 'app suggested ' + (Math.round(newest.suggested * 100) / 100) +
         'u &mdash; not confirmed given'
-      : 'Insulin given by pen &mdash; not recorded';
+      : 'insulin given by pen &mdash; not recorded';
     el.bolus.innerHTML =
       '<div class="bolus-line">' +
         '<span class="amount">' + Math.round(newest.carbs) +
@@ -795,11 +963,17 @@
       '<div class="pen-note">' + note + '</div>';
   }
 
+  var tir14Cache = null;   // filled by its own slow poll
+
   function tick() {
     el.clock.textContent = hhmm(new Date());
     renderGlucose();
     renderGraph();
     renderTreatments();
+    // 24h TIR comes free from the history the graph already loaded.
+    renderTIR(el.tir24,
+      computeTIR(last.entries || [], Date.now() - 24 * 3600000));
+    if (tir14Cache) renderTIR(el.tir14, tir14Cache);
   }
 
   function get(path) {
@@ -859,12 +1033,28 @@
     }).catch(function () { offline(); tick(); });
   }
 
+  // 14-day TIR. A fortnight at 1/min is ~20k points, but Nightscout returns
+  // newest-first and we only need band counts, so cap the fetch and accept
+  // that it's a representative sample rather than every single reading - the
+  // percentages are indistinguishable either way.
+  function pollTIR() {
+    var since = Date.now() - TIR_DAYS * 86400000;
+    get('/api/v1/entries.json?count=20000&find[date][$gte]=' + since)
+      .then(function (res) {
+        tir14Cache = computeTIR(res || [], since);
+        renderTIR(el.tir14, tir14Cache);
+      })
+      .catch(function () { /* leave the last good bar in place */ });
+  }
+
   window.addEventListener('resize', function () { renderGraph(true); });
 
   pollHistory();
+  pollTIR();
   setInterval(pollCurrent, POLL_CURRENT_SEC * 1000);
   setInterval(pollHistory, POLL_HISTORY_SEC * 1000);
   setInterval(tick,        TICK_SEC * 1000);
+  setInterval(pollTIR,     TIR_POLL_SEC * 1000);
 })();
 </script>
 </body>

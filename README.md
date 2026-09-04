@@ -31,6 +31,8 @@ number from forty minutes ago is worse than one showing nothing.
 - **Glucose** from Libre 2 Plus via LibreLinkUp, at one reading a minute
 - **Carbs** from Glooko, for anyone whose pump or pen app forwards there
 - **24-hour trace** with treatment markers, on a TV that boots straight into it
+- **Time in range** as the clinic's stacked bar — last 24 hours and the 14-day
+  clinical window, in the same five bands the diabetes team already reads
 - **Telegram alert** when the data feed stops
 - **Nightly encrypted backups** to another machine
 
@@ -64,6 +66,9 @@ sounds when the data source is unreliable:
   can honestly make.
 - **The axis grows, it never clips.** A fixed ceiling draws a flat line across
   the top and understates how high they actually went.
+- **Time in range won't fake precision.** Below ten readings in a window it
+  says "not enough data yet" rather than drawing a bar that implies a
+  percentage it can't stand behind.
 - **The caveat never leaves the screen**, and it says so when the server is
   unreachable rather than leaving old numbers looking current.
 
@@ -71,6 +76,21 @@ On pens specifically: the vendor app records the carb entry and its own dose
 *suggestion*, but nothing links it to what was actually injected. So the panel
 shows carbs with "app suggested 1.6u — not confirmed given" rather than a
 bolus figure of zero, which would read as "no insulin given".
+
+---
+
+## Time in range
+
+Under the graph sit two stacked bars — the last 24 hours and the last 14 days
+— split into the five consensus bands (very low, low, in range 3.9–10, high,
+very high). This is the same chart the clinic produces, so it reads the same
+way to the diabetes team, and it's on the wall rather than buried in an app.
+
+The 24-hour bar comes free from the history the graph already holds. The
+14-day figure is the clinical standard and is fetched on its own slow poll
+(every 10 minutes by default — a fortnight's TIR barely moves minute to
+minute). Both are tunable at the top of `display/index.html`: `TIR_DAYS` and
+`TIR_POLL_SEC`.
 
 ---
 
