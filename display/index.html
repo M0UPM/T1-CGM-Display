@@ -677,12 +677,24 @@
 
     el.empty.style.display = pts.length < 2 ? 'grid' : 'none';
 
-    // Grow the axis to fit the data rather than clipping it.
-    var yTop = Y_MAX, yBot = Y_MIN;
+    // Grow the axis to fit the data, but SNAP to fixed rungs so it doesn't
+    // twitch every refresh. The old code used Math.ceil(peak)+1, which meant
+    // a peak wobbling between 19.x and 20.x flipped the ceiling between 21 and
+    // 22 on each poll and the whole graph jumped. Snapping to 18/22/26 means
+    // the axis only moves when a peak genuinely crosses a rung - rare, and
+    // stable in between.
+    var peak = Y_MIN, trough = Y_MIN;
     for (var q = 0; q < pts.length; q++) {
-      if (pts[q].v > yTop) yTop = Math.ceil(pts[q].v) + 1;
-      if (pts[q].v < yBot) yBot = Math.floor(pts[q].v);
+      if (pts[q].v > peak)   peak = pts[q].v;
+      if (pts[q].v < trough) trough = pts[q].v;
     }
+    var TOP_RUNGS = [18, 22, 26, 30];
+    var yTop = TOP_RUNGS[TOP_RUNGS.length - 1];
+    for (var r = 0; r < TOP_RUNGS.length; r++) {
+      // 0.5 of headroom so a reading sitting exactly on a rung isn't clipped
+      if (peak <= TOP_RUNGS[r] - 0.5) { yTop = TOP_RUNGS[r]; break; }
+    }
+    var yBot = trough < Y_MIN ? Math.floor(trough) : Y_MIN;
 
     var x = function (t) { return M.left + ((t - t0) / (now - t0)) * PW; };
     var y = function (v) {
@@ -697,9 +709,10 @@
       fill: 'var(--band)', opacity: '0.16'
     }));
 
-    // Plain gridlines: top of the target band, plus an upper line that
-    // reflects however far the scale had to stretch.
-    var upper = yTop >= 20 ? Math.floor(yTop) - 1 : 15;
+    // Plain gridlines: top of the target band, plus one upper reference line
+    // chosen to suit the current rung (and never colliding with the 14 alert
+    // line or the very top of the scale).
+    var upper = yTop <= 18 ? 15 : (yTop <= 22 ? 18 : 22);
     var plain = [10.0];
     if (ALERT_LINES.indexOf(upper) === -1) plain.push(upper);
 
