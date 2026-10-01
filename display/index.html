@@ -2,7 +2,17 @@
 <html lang="en-GB">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+
+  <!-- Installable / kiosk on a tablet -->
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#14171A">
+  <!-- iOS: run as a standalone app with no Safari chrome -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="CGM">
+  <meta name="mobile-web-app-capable" content="yes">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <title>T1 CGM Display</title>
 <style>
   /* Deliberately no web fonts. This box must work with the internet down,
@@ -286,7 +296,16 @@
     text-transform: uppercase;
     color: var(--ink-quiet);
     margin-bottom: 0.2vh;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
   }
+  /* GMI (estimated HbA1c) on the TIR title row, right-aligned. A derived
+     average, NOT a lab result - labelled GMI to match clinic language. */
+  .gmi { color: var(--ink); letter-spacing: 0.08em; }
+  .gmi .gmi-val { font-weight: 800; }
+  .gmi .gmi-unit { opacity: 0.7; font-weight: 600; margin-left: 0.25em; }
+  .gmi.empty { color: var(--ink-quiet); font-weight: 600; }
 
   .tir-row {
     display: grid;
@@ -375,7 +394,10 @@
       </div>
 
       <div class="tir" id="tir">
-        <div class="tir-title">Time in range</div>
+        <div class="tir-title">
+          <span>Time in range</span>
+          <span class="gmi empty" id="gmi">GMI &mdash;</span>
+        </div>
         <div class="tir-row">
           <div class="tir-label">24 hours</div>
           <div class="tir-bar" id="tir24"><div class="tir-empty">building&hellip;</div></div>
@@ -491,6 +513,7 @@
     bolusLabel: document.getElementById('bolusLabel'),
     tir24:  document.getElementById('tir24'),
     tir14:  document.getElementById('tir14'),
+    gmi:    document.getElementById('gmi'),
     clock:  document.getElementById('clock'),
     caveat: document.getElementById('caveatText'),
     chart:  document.getElementById('chart'),
@@ -534,10 +557,10 @@
   ];
 
   function computeTIR(entries, sinceMs) {
-    // Count readings per band over the window. Equal weighting per reading is
-    // the standard method and is accurate when readings are evenly spaced,
-    // which CGM data is.
-    var counts = [0,0,0,0,0], total = 0;
+    // Count readings per band over the window, and sum glucose for GMI in the
+    // same pass. Equal weighting per reading is the standard method and is
+    // accurate when readings are evenly spaced, which CGM data is.
+    var counts = [0,0,0,0,0], total = 0, sumMgdl = 0;
     for (var i = 0; i < entries.length; i++) {
       var e = entries[i];
       if (!e.sgv || e.date < sinceMs) continue;
@@ -545,9 +568,31 @@
       for (var b = 0; b < TIR_BANDS.length; b++) {
         if (v < TIR_BANDS[b].max) { counts[b]++; break; }
       }
+      sumMgdl += e.sgv;
       total++;
     }
-    return { counts: counts, total: total };
+    return { counts: counts, total: total,
+             meanMgdl: total ? sumMgdl / total : 0 };
+  }
+
+  // GMI (Glucose Management Indicator) - the current name for estimated
+  // HbA1c. Bergenstal consensus formula, shown in mmol/mol (UK standard).
+  // A derived average, explicitly NOT a prediction of the lab result, which
+  // is why clinics call it GMI rather than eA1c.
+  function renderGMI(data) {
+    // Needs a decent span to mean anything - below ~3 days it'd be wildly
+    // unrepresentative, so don't show a figure yet.
+    var MIN_READINGS = 3 * 24 * 12;   // ~3 days at one per 5 min
+    if (!data || data.total < MIN_READINGS || !data.meanMgdl) {
+      el.gmi.className = 'gmi empty';
+      el.gmi.innerHTML = 'GMI \u2014';
+      return;
+    }
+    var gmiPct = 3.31 + 0.02392 * data.meanMgdl;
+    var mmolMol = Math.round((gmiPct - 2.15) * 10.929);
+    el.gmi.className = 'gmi';
+    el.gmi.innerHTML = '<span class="gmi-val">GMI ' + mmolMol +
+      '</span><span class="gmi-unit">mmol/mol</span>';
   }
 
   function renderTIR(node, data) {
@@ -844,6 +889,34 @@
       }
     });
 
+    // Marker key, top-right of the plot - out of the way of the caption on
+    // the left and the trace, which rarely rides that high for long.
+    if ((last.treatments || []).length) {
+      var kx = M.left + PW - 250, ky = M.top + 8;
+      // bolus swatch (triangle) + label
+      chart.appendChild(svgEl('path', {
+        d: 'M' + kx + ' ' + (ky + 22) + ' l11 -22 l11 22 Z',
+        fill: 'var(--insulin)'
+      }));
+      var kb = svgEl('text', {
+        x: kx + 30, y: ky + 18, fill: 'var(--ink-quiet)',
+        'font-size': 26, 'font-weight': 600
+      });
+      kb.textContent = 'Bolus';
+      chart.appendChild(kb);
+      // carb swatch (square) + label
+      chart.appendChild(svgEl('rect', {
+        x: kx + 120, y: ky + 4, width: 20, height: 18,
+        fill: 'var(--carbs)', rx: 2.5
+      }));
+      var kc = svgEl('text', {
+        x: kx + 150, y: ky + 18, fill: 'var(--ink-quiet)',
+        'font-size': 26, 'font-weight': 600
+      });
+      kc.textContent = 'Carbs';
+      chart.appendChild(kc);
+    }
+
     // Window caption. The leftmost hour tick lands wherever it lands, which
     // makes the span easy to misread - state it outright.
     var cap = svgEl('text', {
@@ -986,7 +1059,7 @@
     // 24h TIR comes free from the history the graph already loaded.
     renderTIR(el.tir24,
       computeTIR(last.entries || [], Date.now() - 24 * 3600000));
-    if (tir14Cache) renderTIR(el.tir14, tir14Cache);
+    if (tir14Cache) { renderTIR(el.tir14, tir14Cache); renderGMI(tir14Cache); }
   }
 
   function get(path) {
@@ -1056,6 +1129,7 @@
       .then(function (res) {
         tir14Cache = computeTIR(res || [], since);
         renderTIR(el.tir14, tir14Cache);
+        renderGMI(tir14Cache);
       })
       .catch(function () { /* leave the last good bar in place */ });
   }
@@ -1064,6 +1138,30 @@
 
   pollHistory();
   pollTIR();
+
+  // Keep a mounted tablet's screen awake. Silently ignored where the API
+  // isn't available or the OS refuses - it's a nice-to-have, not load-bearing.
+  var wakeLock = null;
+  function keepAwake() {
+    if (!('wakeLock' in navigator)) return;
+    navigator.wakeLock.request('screen').then(function (w) {
+      wakeLock = w;
+      w.addEventListener('release', function () { wakeLock = null; });
+    }).catch(function () { /* denied or not visible - fine */ });
+  }
+  keepAwake();
+
+  // When the tablet wakes or the app returns to foreground: re-acquire the
+  // lock and force an immediate refresh, so it never shows a stale frozen
+  // frame from before it slept.
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'visible') {
+      keepAwake();
+      pollCurrent();
+      pollHistory();
+      pollTIR();
+    }
+  });
   setInterval(pollCurrent, POLL_CURRENT_SEC * 1000);
   setInterval(pollHistory, POLL_HISTORY_SEC * 1000);
   setInterval(tick,        TICK_SEC * 1000);
