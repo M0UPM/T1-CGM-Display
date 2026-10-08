@@ -80,6 +80,24 @@ def load_env():
     return env
 
 
+class TouRequired(Exception):
+    """LibreLinkUp is demanding Terms of Use re-acceptance."""
+
+
+# Small status file so the staleness watchdog can report WHY the feed stopped,
+# not just that it did. Written on error, cleared on a good pass.
+import pathlib as _pathlib
+_STATUS = _pathlib.Path(__file__).resolve().parent / ".poller-status"
+
+def write_status(msg):
+    try: _STATUS.write_text(msg)
+    except Exception: pass
+
+def clear_status():
+    try: _STATUS.unlink()
+    except Exception: pass
+
+
 class LibreLinkUp:
     def __init__(self, env):
         region = (env.get("LINK_UP_REGION") or "EU").upper()
@@ -112,7 +130,7 @@ class LibreLinkUp:
         with urllib.request.urlopen(req, timeout=25) as r:
             return json.loads(r.read().decode())
 
-    def login(self):
+    def login(self):  # noqa: E301
         body = json.dumps({"email": self.user, "password": self.password}).encode()
         req = urllib.request.Request("https://" + self.host + "/llu/auth/login",
                                      data=body, headers=self._headers())
@@ -131,7 +149,19 @@ class LibreLinkUp:
             raise RuntimeError("no authTicket - check the credentials, and "
                                "that the follower invitation was accepted")
         self.token = ticket["token"]
-        uid = d["data"]["user"]["id"]
+
+        # Abbott periodically forces re-acceptance of Terms of Use. Login then
+        # returns status 4 with a 'tou' step and no user id, so what used to
+        # happen here was a cryptic KeyError on 'id'. Detect it and say exactly
+        # what's wrong and how to fix it.
+        step = d.get("data", {}).get("step")
+        user = d.get("data", {}).get("user") or {}
+        if (step and step.get("type") == "tou") or "id" not in user:
+            raise TouRequired(
+                "LibreLinkUp requires Terms of Use re-acceptance. Read the new "
+                "terms in the LibreLinkUp app, then run:  ./accept-tou.py")
+
+        uid = user["id"]
         self.account_id = hashlib.sha256(uid.encode()).hexdigest()
 
     def patient(self):
@@ -295,13 +325,25 @@ def main():
         try:
             llu, _ = one_pass(env, args, llu)
             fails = 0
+        except TouRequired as e:
+            # A terms re-accept won't clear by retrying - a human must accept.
+            # Record the reason for the watchdog, log it, and back off hard so
+            # we're not hammering Abbott every 30s for hours.
+            write_status(str(e))
+            print(f"  {e}")
+            llu = None
+            time.sleep(300)
+            continue
         except Exception as e:
             fails += 1
             print(f"  error: {e}")
+            write_status(f"poller error: {e}")
             llu = None                      # force a fresh login
             # Back off rather than hammering a service that's unhappy.
             time.sleep(min(300, args.loop * (2 ** min(fails, 4))))
             continue
+        else:
+            clear_status()
         time.sleep(args.loop)
 
 

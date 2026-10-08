@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # Staleness watchdog for the LibreLinkUp bridge.
 #
-# This is NOT a glucose alarm and must never become one. The CGM vendor's own
-# app is the safety layer and stays that way. This watches the *plumbing*: it tells
+# This is NOT a glucose alarm and must never become one. Harper's Libre app is
+# the safety layer and stays that way. This watches the *plumbing*: it tells
 # you when the feed has stopped, which is a different problem with a different
 # urgency and a different response.
 #
 # The failure it exists for: the bridge dies - Abbott bumps the app version,
 # DNS breaks inside the container, the region setting gets reverted - and
-# Nightscout keeps serving the last reading it got. The display
+# Nightscout keeps serving the last reading it got. The kitchen display
 # handles that honestly on its own (colour drains, age in a black badge), but
-# nothing tells you if you are not in the room.
+# nothing tells you if you are not in the kitchen.
 #
 # Notifies once when the feed goes stale and once when it comes back. It does
 # not repeat every ten minutes, because an alert you learn to ignore is worse
@@ -23,30 +23,15 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# Remember anything passed on the command line - sourcing .env would
-# otherwise clobber it, and a --test that silently does nothing is worse than
-# no --test at all.
-_ARG_STALE="${STALE_MINUTES:-}"
-_ARG_NS="${NS_URL:-}"
-
 # shellcheck disable=SC1091
 [[ -f .env ]] && { set -a; source .env; set +a; }
 
-# Explicit environment beats .env beats the default.
-NS="${_ARG_NS:-${NS_URL:-http://localhost:1337}}"
+NS="${NS_URL:-http://localhost:1337}"
 
 # Libre 2 Plus streams every minute and LibreLinkUp batches, so 20 minutes of
 # silence is well past anything explainable by a missed poll. Raise it if the
 # phone routinely wanders out of range and you start getting noise.
-STALE_MINUTES="${_ARG_STALE:-${STALE_MINUTES:-20}}"
-
-# --test sends a notification immediately and changes nothing else, so you can
-# prove the alerting path works without waiting for something to break.
-if [[ "${1:-}" == "--test" ]]; then
-    STALE_MINUTES=-1
-    TEST_MODE=1
-fi
-TEST_MODE="${TEST_MODE:-0}"
+STALE_MINUTES="${STALE_MINUTES:-20}"
 
 # Remembers whether the current outage has already been reported.
 STATE="${SCRIPT_DIR}/.staleness-state"
@@ -54,6 +39,19 @@ STATE="${SCRIPT_DIR}/.staleness-state"
 log() { echo "[$(date -Is)] $*"; }
 
 # ---- notification --------------------------------------------------------
+
+# The poller writes a specific reason here when it hits something a retry
+# won't fix (e.g. Terms of Use re-acceptance). Surface it in the alert so the
+# 4am message says what to actually do, not just "something's wrong".
+POLLER_STATUS="${SCRIPT_DIR}/.poller-status"
+poller_reason() {
+    [[ -f "$POLLER_STATUS" ]] || return 0
+    # Only trust it if it's recent (updated in the last 2 hours), so a stale
+    # leftover reason can't mislead.
+    local age_s=$(( $(date +%s) - $(stat -c %Y "$POLLER_STATUS" 2>/dev/null || echo 0) ))
+    (( age_s < 7200 )) || return 0
+    cat "$POLLER_STATUS"
+}
 
 notify() {
     local msg="$1"
@@ -74,8 +72,8 @@ notify() {
     fi
 }
 
-was_stale()   { [[ "$TEST_MODE" == "1" ]] && return 1; [[ -f "$STATE" ]]; }
-mark_stale()  { [[ "$TEST_MODE" == "1" ]] && return 0; date -Is > "$STATE"; }
+was_stale()   { [[ -f "$STATE" ]]; }
+mark_stale()  { date -Is > "$STATE"; }
 clear_stale() { rm -f "$STATE"; }
 
 # ---- check ---------------------------------------------------------------
@@ -105,10 +103,13 @@ if (( AGE_MIN > STALE_MINUTES )); then
         exit 1
     fi
     mark_stale
+    REASON="$(poller_reason)"
     notify "Glucose feed stopped - last reading ${AGE_MIN} min ago.
-
-The display has greyed out, so it is not showing a stale number as
-if it were live. The Libre app is unaffected and still alarming.
+${REASON:+
+>> $REASON
+}
+The display has greyed out, so it is not showing a stale number as if it
+were live. The Libre app is unaffected and still alarming.
 
 Usual causes, most likely first:
  - phone out of Bluetooth range of the sensor
