@@ -140,6 +140,13 @@ ls -1t "${OUT}"/nightscout-*.archive.age 2>/dev/null \
     | tail -n "+$(( ${BACKUP_KEEP:-7} + 1 ))" \
     | xargs -r rm -f
 
+# A backup that never left the house protects against nothing the house can
+# lose. Fail the unit so `systemctl --failed` shows it, rather than exiting 0.
+if [[ -n "${BACKUP_TARGET:-}" && "${SHIPPED:-0}" != "1" ]]; then
+    log "done, but NOT shipped off-site"
+    exit 1
+fi
+
 log "done"
 
 # ---------------------------------------------------------------------------

@@ -90,8 +90,11 @@ echo "Mode: $MODE"
 
 if [[ "$MODE" == "x11" ]]; then
     OZONE_FLAG=""
-    # Old Intel graphics: software rendering beats broken GPU compositing.
-    GPU_FLAGS="--disable-gpu --disable-software-rasterizer=false"
+    # Old Intel graphics: software compositing beats broken GPU compositing.
+    # (No --disable-software-rasterizer here: Chromium treats any value,
+    # including =false, as "switch present", which would remove the software
+    # fallback this mode depends on.)
+    GPU_FLAGS="--disable-gpu"
 else
     OZONE_FLAG="--ozone-platform=wayland"
     GPU_FLAGS="${GPU_FLAGS:-}"
@@ -285,10 +288,14 @@ allowed_users=anybody
 needs_root_rights=yes
 EOF
 
+    # Same as cage: this unit owns tty1, so getty must not.
+    sudo systemctl disable --now getty@tty1.service >/dev/null 2>&1 || true
+
     sudo tee /etc/systemd/system/ns-kiosk.service >/dev/null <<EOF
 [Unit]
 Description=T1 CGM display kiosk (X11)
-After=docker.service systemd-user-sessions.service
+After=docker.service systemd-user-sessions.service getty@tty1.service
+Conflicts=getty@tty1.service
 Wants=docker.service
 
 [Service]
@@ -344,7 +351,8 @@ Description=Disable console blanking
 
 [Service]
 Type=oneshot
-ExecStart=/bin/sh -c 'setterm --blank 0 --powerdown 0 >/dev/tty1 || true'
+# setterm refuses to run without TERM, and systemd services have none.
+ExecStart=/bin/sh -c 'TERM=linux setterm --blank 0 --powerdown 0 >/dev/tty1 || true'
 
 [Install]
 WantedBy=multi-user.target

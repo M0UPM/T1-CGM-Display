@@ -1,8 +1,9 @@
-# Systemd units. Adjust User= and the paths, then:
+# Systemd units. Save each block below as the file named in its header
+# (under /etc/systemd/system/), adjust User= and the paths, then:
 #
-#   sudo cp *.service *.timer /etc/systemd/system/
 #   sudo systemctl daemon-reload
 #   sudo systemctl enable --now ns-backup.timer ns-staleness.timer ns-kiosk-restart.timer ns-glooko.timer
+#   sudo systemctl enable --now libre-poll.service   # only if replacing the bridge container
 #
 # Check them with:  systemctl list-timers 'ns-*'
 
@@ -129,14 +130,14 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=YOURUSER
-WorkingDirectory=/home/YOURUSER/ns-kitchen
-ExecStart=/home/YOURUSER/ns-kitchen/libre-poll.py --loop 30
+WorkingDirectory=/home/YOURUSER/t1-display
+ExecStart=/home/YOURUSER/t1-display/libre-poll.py --loop 30
 Restart=always
 RestartSec=30
 
 [Install]
 WantedBy=multi-user.target
 
-# Note this is a service, not a timer - it holds its own loop so it can go
-# below systemd's one-second timer granularity comfortably, and it keeps the
-# session open between polls rather than logging in every time.
+# Note this is a service, not a timer - it holds its own loop, so a 30s
+# interval isn't subject to systemd's default one-minute timer accuracy, and
+# it keeps the session open between polls rather than logging in every time.

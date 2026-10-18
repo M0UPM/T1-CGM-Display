@@ -53,28 +53,46 @@ poller_reason() {
     cat "$POLLER_STATUS"
 }
 
+# Returns 0 if at least one channel accepted the message.
 notify() {
-    local msg="$1"
+    local msg="$1" sent=1
     log "$msg"
 
     if [[ -n "${TELEGRAM_BOT_TOKEN:-}" && -n "${TELEGRAM_CHAT_ID:-}" ]]; then
-        curl -sf -m 15 \
+        if curl -sf -m 15 \
             "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
             --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
             --data-urlencode "text=${msg}" \
             -d "disable_web_page_preview=true" \
-            >/dev/null || log "telegram send failed"
+            >/dev/null; then
+            sent=0
+        else
+            log "telegram send failed"
+        fi
     fi
 
     # Anything else already in use - ntfy, a webhook, whatever.
     if [[ -n "${NOTIFY_URL:-}" ]]; then
-        curl -sf -m 10 -d "$msg" "$NOTIFY_URL" >/dev/null || log "notify failed"
+        if curl -sf -m 10 -d "$msg" "$NOTIFY_URL" >/dev/null; then
+            sent=0
+        else
+            log "notify failed"
+        fi
     fi
+
+    return "$sent"
 }
 
 was_stale()   { [[ -f "$STATE" ]]; }
 mark_stale()  { date -Is > "$STATE"; }
 clear_stale() { rm -f "$STATE"; }
+
+# ./ns-staleness.sh --test  - send one message through every configured
+# channel and exit non-zero if none accepted it. Touches no state.
+if [[ "${1:-}" == "--test" ]]; then
+    notify "Test from ns-staleness.sh - feed alerts will arrive here. (Not a glucose alarm.)"
+    exit $?
+fi
 
 # ---- check ---------------------------------------------------------------
 

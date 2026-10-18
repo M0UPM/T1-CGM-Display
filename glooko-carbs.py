@@ -39,7 +39,6 @@ API_SECRET from .env alongside this file.
 import argparse
 import hashlib
 import json
-import os
 import sys
 import urllib.error
 import urllib.parse
@@ -49,6 +48,11 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 STATE = HERE / ".glooko-seen.json"
+
+# Posted records are remembered by guid -> created_at, and forgotten once
+# they're this old. Pruning by time (not by sorting random guids) is what
+# guarantees nothing inside the fetch window is ever forgotten and re-posted.
+SEEN_KEEP_DAYS = 90
 
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
       "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Safari/605.1.15")
@@ -188,10 +192,17 @@ def main():
         sys.exit("API_SECRET missing from .env")
     secret_sha1 = hashlib.sha1(secret.encode()).hexdigest()
 
-    seen = set()
+    seen = {}
     if STATE.exists():
         try:
-            seen = set(json.loads(STATE.read_text()))
+            raw = json.loads(STATE.read_text())
+            if isinstance(raw, list):
+                # Old format: bare guids with no time. Stamp them now so they
+                # age out after SEEN_KEEP_DAYS like everything else.
+                now_iso = datetime.now(timezone.utc).strftime(
+                    "%Y-%m-%dT%H:%M:%S.000Z")
+                raw = {guid: now_iso for guid in raw if guid}
+            seen = dict(raw)
         except Exception:
             pass
 
@@ -206,7 +217,11 @@ def main():
 
     posted = skipped = 0
     for r in sorted(records, key=lambda x: x.get("pumpTimestamp", "")):
-        guid = r.get("guid")
+        # Without a guid, fall back to the record's own content so it still
+        # dedupes rather than being re-posted on every run.
+        guid = r.get("guid") or "{}|{}|{}".format(
+            r.get("pumpTimestamp"), r.get("carbsInput"),
+            r.get("insulinDelivered"))
         carbs = r.get("carbsInput")
         insulin = r.get("insulinDelivered") or 0
         stamp = r.get("pumpTimestamp")
@@ -253,11 +268,16 @@ def main():
 
         if post_treatment(args.ns, secret_sha1, treatment, args.dry_run):
             posted += 1
-            seen.add(guid)
+            seen[guid] = treatment["created_at"]
 
     if not args.dry_run:
-        # Keep the state file from growing without bound.
-        STATE.write_text(json.dumps(sorted(seen)[-2000:]))
+        # Keep the state file from growing without bound, but never forget a
+        # record that this run's fetch window could return again.
+        keep = timedelta(days=max(SEEN_KEEP_DAYS, args.days + 1))
+        cutoff = (datetime.now(timezone.utc) - keep
+                  ).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        seen = {g: t for g, t in seen.items() if t >= cutoff}
+        STATE.write_text(json.dumps(seen, sort_keys=True))
 
     print(f"posted {posted}, already had {skipped}")
 

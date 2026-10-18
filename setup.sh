@@ -101,9 +101,18 @@ yes_no "Understood?" y || { say "  Fair enough. Nothing changed."; exit 0; }
 # ---- 1. preflight ---------------------------------------------------------
 
 head1 "1. Checking this machine"
+MONGO_TAG=""
 if [[ -x ./preflight.sh ]]; then
-    ./preflight.sh | sed 's/^/  /'
+    PREFLIGHT="$(./preflight.sh)"; PREFLIGHT_RC=$?
+    printf '%s\n' "$PREFLIGHT" | sed 's/^/  /'
     echo
+    if (( PREFLIGHT_RC != 0 )); then
+        bad "Preflight found a blocking problem - see above."
+        exit 1
+    fi
+    # preflight owns the per-architecture rules (AVX on x86_64, ARMv8.2-A on
+    # arm64), so take its suggestion rather than re-deriving a partial copy.
+    MONGO_TAG="$(printf '%s\n' "$PREFLIGHT" | sed -n 's/^ *MONGO_TAG=//p' | tail -1)"
     yes_no "Continue?" y || exit 0
 else
     warn "preflight.sh not found, skipping hardware checks"
@@ -122,12 +131,10 @@ if ! docker ps >/dev/null 2>&1; then
 fi
 ok "Docker is working"
 
-MONGO_TAG=7
-if ! grep -qm1 '^flags.*\bavx\b' /proc/cpuinfo 2>/dev/null; then
-    if [[ "$(uname -m)" == "x86_64" ]]; then
-        MONGO_TAG=4.4
-        warn "No AVX on this CPU - using MongoDB 4.4 (EOL, but 5+ won't start)"
-    fi
+if [[ -z "$MONGO_TAG" ]]; then
+    MONGO_TAG="$(get_env MONGO_TAG)"
+    MONGO_TAG="${MONGO_TAG:-7}"
+    warn "Couldn't determine MONGO_TAG - using ${MONGO_TAG}. Run ./preflight.sh to check."
 fi
 set_env MONGO_TAG "$MONGO_TAG"
 
@@ -190,22 +197,38 @@ if yes_no "Ready to enter the FOLLOWER account details?" y; then
     LLU_PASS=$(ask_secret "Follower password")
     [[ -z "$LLU_PASS" ]] && LLU_PASS="$(get_env LINK_UP_PASSWORD)"
 
-    # Try both EU endpoints so nobody has to discover EU2 from a log file.
+    # Start on EU and follow the region redirect, so nobody has to discover
+    # EU2 (or any other region) from a log file. Credentials go through the
+    # environment and json.dumps, so quotes or backslashes in the password
+    # can't break the request.
     say ""
-    printf '  testing login'
-    REGION=""
-    for R in EU EU2; do
-        printf '.'
-        HOST="api-eu.libreview.io"; [[ "$R" == "EU2" ]] && HOST="api-eu2.libreview.io"
-        RESP=$(curl -s -m 20 -X POST "https://${HOST}/llu/auth/login" \
-            -H 'Content-Type: application/json' \
-            -H 'product: llu.android' -H 'version: 4.16.0' \
-            -H 'accept-encoding: gzip' \
-            -d "{\"email\":\"${LLU_USER}\",\"password\":\"${LLU_PASS}\"}" 2>/dev/null)
-        if echo "$RESP" | grep -q '"authTicket"'; then REGION="$R"; break; fi
-        if echo "$RESP" | grep -qi 'redirect'; then continue; fi
-    done
-    echo
+    note "testing login..."
+    REGION=$(LLU_USER="$LLU_USER" LLU_PASS="$LLU_PASS" \
+             LLU_VERSION="$(get_env LINK_UP_VERSION)" python3 - <<'PY'
+import json, os, urllib.request
+body = json.dumps({"email": os.environ["LLU_USER"],
+                   "password": os.environ["LLU_PASS"]}).encode()
+headers = {"product": "llu.android",
+           "version": os.environ.get("LLU_VERSION") or "4.16.0",
+           "Content-Type": "application/json", "Accept": "application/json"}
+region = "eu"
+for _ in range(2):
+    req = urllib.request.Request(
+        f"https://api-{region}.libreview.io/llu/auth/login",
+        data=body, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            d = json.load(r).get("data") or {}
+    except Exception:
+        break
+    if d.get("redirect") and d.get("region"):
+        region = d["region"].lower()
+        continue
+    if d.get("authTicket"):
+        print(region.upper())
+    break
+PY
+)
 
     if [[ -n "$REGION" ]]; then
         ok "Logged in - your account is on region ${REGION}"
@@ -213,7 +236,7 @@ if yes_no "Ready to enter the FOLLOWER account details?" y; then
         set_env LINK_UP_PASSWORD "$LLU_PASS"
         set_env LINK_UP_REGION "$REGION"
     else
-        bad "Could not log in on either EU endpoint."
+        bad "Could not log in."
         note "Check the password, and that the follower invitation was ACCEPTED"
         note "in the LibreLinkUp app. Writing the details anyway so you can"
         note "fix them in .env later."
@@ -250,38 +273,55 @@ cat <<'TOK'
 
 TOK
 
-TOKEN_SUFFIX=$(head -c 8 /dev/urandom | xxd -p)
-docker compose exec -T mongo mongosh nightscout --quiet --eval "
-db.auth_roles.deleteMany({name: {\$in: [null, '']}});
-db.auth_roles.updateOne({name:'entries-upload'},
-  {\$set:{name:'entries-upload', permissions:['api:entries:create'], notes:''}},
-  {upsert:true});
-var s = db.auth_subjects.findOne({name:'librelink'});
-if (!s) {
-  db.auth_subjects.insertOne({
-    name:'librelink',
-    roles:['careportal','devicestatus-upload','entries-upload'],
-    accessToken:'librelink-${TOKEN_SUFFIX}',
-    notes:'', created_at:new Date().toISOString()
-  });
-} else {
-  db.auth_subjects.updateOne({name:'librelink'},
-    {\$set:{roles:['careportal','devicestatus-upload','entries-upload']}});
-}
-print(db.auth_subjects.findOne({name:'librelink'}).accessToken);
-" 2>/dev/null | tail -1 | tr -d '\r' > /tmp/.nstoken
+# Nightscout derives each subject's access token from API_SECRET and the
+# subject's _id when it loads them - any accessToken stored in the document is
+# ignored. So create the role and subject through the API (which also reloads
+# Nightscout's auth cache) and read back the token it actually accepts.
+TOKEN=$(NS_SECRET="$API_SECRET" python3 - <<'PY'
+import hashlib, json, os, urllib.request
+NS = "http://localhost:1337/api/v2/authorization"
+SECRET = hashlib.sha1(os.environ["NS_SECRET"].encode()).hexdigest()
+ROLES = ["careportal", "devicestatus-upload", "entries-upload"]
 
-TOKEN=$(cat /tmp/.nstoken); rm -f /tmp/.nstoken
-if [[ -z "$TOKEN" || "$TOKEN" == "null" ]]; then
+def call(method, path, body=None):
+    req = urllib.request.Request(
+        NS + path, method=method,
+        data=None if body is None else json.dumps(body).encode(),
+        headers={"api-secret": SECRET, "Content-Type": "application/json",
+                 "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        return json.load(r)
+
+def find(path, name):
+    # Built-in roles have no _id; only stored documents can be updated.
+    return next((x for x in call("GET", path)
+                 if x.get("name") == name and x.get("_id")), None)
+
+role = {"name": "entries-upload", "permissions": ["api:entries:create"],
+        "notes": ""}
+existing = find("/roles", "entries-upload")
+if existing:
+    call("PUT", "/roles", dict(role, _id=existing["_id"]))
+else:
+    call("POST", "/roles", role)
+
+subject = {"name": "librelink", "roles": ROLES, "notes": ""}
+existing = find("/subjects", "librelink")
+if existing:
+    call("PUT", "/subjects", dict(subject, _id=existing["_id"]))
+else:
+    call("POST", "/subjects", subject)
+
+print(find("/subjects", "librelink")["accessToken"])
+PY
+)
+
+if [[ -z "$TOKEN" ]]; then
     bad "Couldn't create the token automatically."
     note "Do it by hand - see SETUP.md step 4 - then re-run this script."
     exit 1
 fi
 ok "Token: ${TOKEN}"
-
-# Nightscout caches authorization at startup
-docker compose up -d --force-recreate nightscout >/dev/null 2>&1
-sleep 15
 
 PERMS=$(curl -s "http://localhost:1337/api/v2/authorization/request/${TOKEN}" 2>/dev/null)
 if echo "$PERMS" | grep -q 'api:entries:create'; then

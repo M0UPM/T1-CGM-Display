@@ -47,22 +47,15 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 STATE = HERE / ".libre-seen.json"
 
+# Small status file so the staleness watchdog can report WHY the feed stopped,
+# not just that it did. Written on error, cleared on a good pass.
+STATUS = HERE / ".poller-status"
+
 # Abbott rejects stale client versions. If logins start failing with an
 # unhelpful error, this is the first thing to check against the LibreLinkUp
-# app's current version.
+# app's current version. LINK_UP_VERSION in .env overrides it, so one setting
+# covers this script and the bridge container.
 LLU_VERSION = "4.16.0"
-
-REGIONS = {
-    "EU":  "api-eu.libreview.io",
-    "EU2": "api-eu2.libreview.io",
-    "US":  "api-us.libreview.io",
-    "AU":  "api-au.libreview.io",
-    "AP":  "api-ap.libreview.io",
-    "CA":  "api-ca.libreview.io",
-    "DE":  "api-de.libreview.io",
-    "FR":  "api-fr.libreview.io",
-    "JP":  "api-jp.libreview.io",
-}
 
 MGDL_PER_MMOL = 18.018
 
@@ -84,24 +77,28 @@ class TouRequired(Exception):
     """LibreLinkUp is demanding Terms of Use re-acceptance."""
 
 
-# Small status file so the staleness watchdog can report WHY the feed stopped,
-# not just that it did. Written on error, cleared on a good pass.
-import pathlib as _pathlib
-_STATUS = _pathlib.Path(__file__).resolve().parent / ".poller-status"
-
 def write_status(msg):
-    try: _STATUS.write_text(msg)
-    except Exception: pass
+    try:
+        STATUS.write_text(msg)
+    except OSError:
+        pass
+
 
 def clear_status():
-    try: _STATUS.unlink()
-    except Exception: pass
+    try:
+        STATUS.unlink()
+    except OSError:
+        pass
 
 
 class LibreLinkUp:
     def __init__(self, env):
-        region = (env.get("LINK_UP_REGION") or "EU").upper()
-        self.host = REGIONS.get(region, REGIONS["EU"])
+        # Every region lives at api-<region>.libreview.io. A wrong region is
+        # caught at login, where Abbott answers with a redirect naming the
+        # right one.
+        region = (env.get("LINK_UP_REGION") or "EU").lower()
+        self.host = f"api-{region}.libreview.io"
+        self.version = env.get("LINK_UP_VERSION") or LLU_VERSION
         self.user = env["LINK_UP_USERNAME"]
         self.password = env["LINK_UP_PASSWORD"]
         self.want_patient = env.get("LINK_UP_CONNECTION") or None
@@ -111,7 +108,7 @@ class LibreLinkUp:
     def _headers(self):
         h = {
             "product": "llu.android",
-            "version": LLU_VERSION,
+            "version": self.version,
             "Content-Type": "application/json",
             "Accept": "application/json",
             "User-Agent": "Mozilla/5.0",

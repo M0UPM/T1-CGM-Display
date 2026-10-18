@@ -17,6 +17,8 @@ backups/
 
 # Runtime state
 .glooko-seen.json
+.libre-seen.json
+.poller-status
 .staleness-state
 data/
 

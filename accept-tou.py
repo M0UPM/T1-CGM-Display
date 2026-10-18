@@ -35,7 +35,8 @@ def main():
     env = load_env()
     region = (env.get("LINK_UP_REGION") or "EU").lower()
     host = f"api-{region}.libreview.io"
-    H = {"product": "llu.android", "version": "4.16.0",
+    H = {"product": "llu.android",
+         "version": env.get("LINK_UP_VERSION") or "4.16.0",
          "Content-Type": "application/json", "Accept": "application/json",
          "User-Agent": "Mozilla/5.0"}
 
